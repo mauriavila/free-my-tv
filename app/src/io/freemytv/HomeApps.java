@@ -178,8 +178,7 @@ final class HomeApps {
         Set<String> seen = new HashSet<>();
         for (String[] d : SHELF) if (launchIntent(pm, d[2]) != null && seen.add(d[2])) out.add(new String[] {d[2], d[1]});
         List<String[]> more = new ArrayList<>();
-        Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        for (ResolveInfo ri : pm.queryIntentActivities(query, 0)) {
+        for (ResolveInfo ri : tvApps(pm)) {
             String pkg = ri.activityInfo.packageName;
             if (pkg.equals(c.getPackageName()) || HIDDEN.contains(pkg) || !seen.add(pkg)) continue;
             more.add(new String[] {pkg, String.valueOf(ri.loadLabel(pm))});
@@ -337,10 +336,9 @@ final class HomeApps {
         skip.addAll(java.util.Arrays.asList(LIVE_TV_APPS));
         skip.add(c.getPackageName());
         skip.addAll(HIDDEN);
-        Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
         List<Item> items = new ArrayList<>();
         Set<String> seen = new HashSet<>();
-        for (ResolveInfo ri : pm.queryIntentActivities(query, 0)) {
+        for (ResolveInfo ri : tvApps(pm)) {
             String pkg = ri.activityInfo.packageName;
             if (skip.contains(pkg) || !seen.add(pkg)) continue;
             Item it = new Item();
@@ -447,6 +445,17 @@ final class HomeApps {
         } catch (RuntimeException ignored) {
         }
         return system != null ? system : fallback;
+    }
+
+    /**
+     * The apps a TV launcher lists: those with a TV icon (LEANBACK_LAUNCHER). On Fire TV also the plain Android apps
+     * (LAUNCHER), since Amazon's launcher shows sideloaded phone apps too (callers drop the repeated packages).
+     */
+    static List<ResolveInfo> tvApps(PackageManager pm) {
+        List<ResolveInfo> out = new ArrayList<>(pm.queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0));
+        if (Ui.FIRE) out.addAll(pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0));
+        return out;
     }
 
     static Intent launchIntent(PackageManager pm, String pkg) {
