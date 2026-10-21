@@ -90,6 +90,7 @@ final class HomeApps {
         {"disney", "Disney+", "com.disney.disneyplus", "1838C8", "", "1"},
         {"max", "Max", "com.wbd.stream", "6C3BE0", "", "1.32"},
         {"appletv", "Apple TV", "com.apple.atve.androidtv.appletv", "B8BCC6", "", "1.1"},
+        {"appletv", "Apple TV", "com.apple.atve.amazon.appletv", "B8BCC6", "", "1.1"},        // Fire TV
         {"hulu", "Hulu", "com.hulu.livingroomplus", "1CE783", "", "1"},
         {"paramount", "Paramount+", "com.cbs.ott", "0064FF", "", "1"},
         {"paramount", "Paramount+", "com.cbs.ca", "0064FF", "", "1"},                        // Fire TV, Latin America

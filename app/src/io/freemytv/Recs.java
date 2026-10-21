@@ -73,6 +73,7 @@ final class Recs {
         {"globoplay", "globoplay", "com.globo.globotv"},
         {"max", "max", "com.wbd.stream"},
         {"apple tv", "appletv", "com.apple.atve.androidtv.appletv"},
+        {"apple tv", "appletv", "com.apple.atve.amazon.appletv"},   // Apple TV on Fire TV
         {"crunchyroll", "crunchyroll", "com.crunchyroll.crunchyroid"},
     };
     private static final Map<String, String> SERVICE_NAME = new HashMap<>();

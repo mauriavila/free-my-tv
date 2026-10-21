@@ -19,6 +19,7 @@
         <package android:name="com.disney.disneyplus" />
         <package android:name="com.wbd.stream" />
         <package android:name="com.apple.atve.androidtv.appletv" />
+        <package android:name="com.apple.atve.amazon.appletv" />
         <package android:name="com.hulu.livingroomplus" />
         <package android:name="com.cbs.ott" />
         <package android:name="com.peacocktv.peacockandroid" />
