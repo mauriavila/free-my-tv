@@ -8,6 +8,7 @@ final class Spanish {
         switch (english) {
             case "Live TV": return "TV en vivo";
             case "Open": return "Abrir";
+            case "connected": return "conectado";
             case "Speaker": return "Parlante";
             case "Couldn't connect to ": return "No se pudo conectar a ";
             case "Disconnected: ": return "Desconectado: ";

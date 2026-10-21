@@ -2182,7 +2182,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             return;
         }
         if (it.kind == HomeApps.BT_SPEAKER) {
-            BtSpeaker.toggle(getContext());
+            if (getContext() instanceof android.app.Activity) BtSpeaker.open((android.app.Activity) getContext());
             return;
         }
         if (it.kind == HomeApps.INPUTS) {

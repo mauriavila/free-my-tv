@@ -15,6 +15,7 @@ final class Russian {
         switch (english) {
             case "Live TV": return "Телеканалы";
             case "Open": return "Открыть";
+            case "connected": return "подключено";
             case "Speaker": return "Колонка";
             case "Couldn't connect to ": return "Не удалось подключиться к ";
             case "Disconnected: ": return "Отключено: ";

@@ -8,6 +8,7 @@ final class German {
         switch (english) {
             case "Live TV": return "Live-TV";
             case "Open": return "Öffnen";
+            case "connected": return "verbunden";
             case "Speaker": return "Lautsprecher";
             case "Couldn't connect to ": return "Keine Verbindung zu ";
             case "Disconnected: ": return "Getrennt: ";
