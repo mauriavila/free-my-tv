@@ -14,6 +14,8 @@ final class Russian {
     static String text(String english) {
         switch (english) {
             case "Live TV": return "Телеканалы";
+            case "Open": return "Открыть";
+            case "Fire TV Home": return "Главная Fire TV";
             case "All Apps": return "Приложения";
             case "Settings": return "Настройки";
             case "Home Settings": return "Главный экран";

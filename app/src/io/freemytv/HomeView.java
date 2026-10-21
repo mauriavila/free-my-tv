@@ -467,8 +467,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** The three corner buttons, with their names in the current language. */
     private void makeLightButtons() {
         lightButtons.clear();
-        lightButtons.add(HomeApps.action(HomeApps.LIVE_TV, "live", Ui.tr("TV aberta", "Live TV"), "live_tv"));
-        lightButtons.add(HomeApps.action(HomeApps.INPUTS, "inputs", Ui.tr("Entradas HDMI", "HDMI Inputs"), "hdmi"));
+        if (Ui.FIRE) {
+            // A Fire TV stick has no live TV or HDMI inputs: All Apps and the way back to Amazon's home instead.
+            lightButtons.add(HomeApps.action(HomeApps.ALL_APPS, "apps", Ui.tr("Todos os Apps", "All Apps"), "apps"));
+            lightButtons.add(HomeApps.action(HomeApps.FIRE_HOME, "firehome", Ui.tr("Início do Fire TV", "Fire TV Home"), "home"));
+        } else {
+            lightButtons.add(HomeApps.action(HomeApps.LIVE_TV, "live", Ui.tr("TV aberta", "Live TV"), "live_tv"));
+            lightButtons.add(HomeApps.action(HomeApps.INPUTS, "inputs", Ui.tr("Entradas HDMI", "HDMI Inputs"), "hdmi"));
+        }
         lightButtons.add(HomeApps.action(HomeApps.SETTINGS, "settings", Ui.tr("Configurações", "Settings"), "settings"));
     }
 

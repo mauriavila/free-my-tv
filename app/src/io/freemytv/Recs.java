@@ -64,13 +64,16 @@ final class Recs {
     private static final String[][] SERVICES = {
         {"netflix", "netflix", "com.netflix.ninja"},
         {"prime video", "prime", "com.amazon.amazonvideo.livingroom"},
+        {"prime video", "prime", "com.amazon.firebat"},   // Prime Video on Fire TV
         {"disney", "disney", "com.disney.disneyplus"},
         {"hulu", "hulu", "com.hulu.livingroomplus"},
         {"paramount", "paramount", "com.cbs.ott"},
+        {"paramount", "paramount", "com.cbs.ca"},          // Paramount+ on Fire TV (Latin America, Canada)
         {"peacock", "peacock", "com.peacocktv.peacockandroid"},
         {"globoplay", "globoplay", "com.globo.globotv"},
         {"max", "max", "com.wbd.stream"},
         {"apple tv", "appletv", "com.apple.atve.androidtv.appletv"},
+        {"crunchyroll", "crunchyroll", "com.crunchyroll.crunchyroid"},
     };
     private static final Map<String, String> SERVICE_NAME = new HashMap<>();
     static {
@@ -83,6 +86,7 @@ final class Recs {
         SERVICE_NAME.put("globoplay", "Globoplay");
         SERVICE_NAME.put("max", "Max");
         SERVICE_NAME.put("appletv", "Apple TV");
+        SERVICE_NAME.put("crunchyroll", "Crunchyroll");
     }
     /** Country for "what streams where" (config.properties "tmdb_region", e.g. US, GB, BR). */
     private static final String REGION = Config.TMDB_REGION.trim().toUpperCase(Locale.ROOT);
@@ -129,7 +133,27 @@ final class Recs {
     void removeListener(Listener l) { listeners.remove(l); }
 
     static boolean hasKey(Context c) {
-        return !Config.TMDB_KEY.trim().isEmpty();
+        return !key(c).isEmpty();
+    }
+
+    /**
+     * The TMDB key: the one built in (config.properties), or else one copied to the TV next to the app's files, so a
+     * shared build carries no key: adb push tmdb_key.txt /sdcard/Android/data/io.freemytv/files/tmdb_key.txt
+     */
+    static String key(Context c) {
+        String built = Config.TMDB_KEY.trim();
+        if (!built.isEmpty()) return built;
+        try {
+            java.io.File dir = c.getExternalFilesDir(null);
+            if (dir == null) return "";
+            java.io.File f = new java.io.File(dir, "tmdb_key.txt");
+            if (!f.isFile() || f.length() > 4096) return "";
+            try (java.io.InputStream in = new java.io.FileInputStream(f)) {
+                return read(in).trim();
+            }
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /** Last fetch, for the settings screen: {count, error, at}. Written by the home screen (another process). */
@@ -491,7 +515,7 @@ final class Recs {
             }
         }
         if (p.app != null) parts.add(SERVICE_NAME.get(p.app));
-        p.meta = String.join(" · ", parts);
+        p.meta = android.text.TextUtils.join(" · ", parts);
         p.detailed = true;
     }
 
@@ -557,12 +581,16 @@ final class Recs {
         return best;
     }
 
-    private static String[] service(String name) {
+    /** The service's row, preferring the variant installed here (the same service has another app on Fire TV). */
+    private String[] service(String name) {
         String n = name.toLowerCase(Locale.ROOT);
+        String[] first = null;
         for (String[] s : SERVICES) {
-            if (s[0].equals("max") ? n.matches(".*\\bmax\\b.*") : n.contains(s[0])) return s;
+            if (!(s[0].equals("max") ? n.matches(".*\\bmax\\b.*") : n.contains(s[0]))) continue;
+            if (installed(s[2])) return s;
+            if (first == null) first = s;
         }
-        return null;
+        return first;
     }
 
     private boolean installed(String pkg) {
@@ -570,7 +598,7 @@ final class Recs {
     }
 
     private long sourceStamp() {
-        long stamp = Config.TMDB_KEY.hashCode() * 31L + REGION.hashCode();
+        long stamp = key(context).hashCode() * 31L + REGION.hashCode();
         for (String[] service : SERVICES) stamp = stamp * 31L + (installed(service[2]) ? service[2].hashCode() : 0);
         return stamp;
     }
@@ -596,7 +624,7 @@ final class Recs {
     }
 
     private String readKey() {
-        String key = Config.TMDB_KEY.trim();
+        String key = key(context);
         return key.isEmpty() ? null : key;
     }
 

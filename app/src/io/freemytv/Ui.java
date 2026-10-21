@@ -27,6 +27,11 @@ final class Ui {
 
     /** Android 9 to 11: older TVs and boxes, whose GPUs need the cheaper drawing paths (Shadows, rounded images). */
     static final boolean LEGACY = Build.VERSION.SDK_INT < 31;
+    /**
+     * Amazon Fire TV (Fire OS): Amazon blocks other home screens, so Free My TV is an app there. It never switches the
+     * home screen, never turns anything off and never uses the TV's ADB; the app's icon opens the home screen itself.
+     */
+    static final boolean FIRE = "Amazon".equalsIgnoreCase(Build.MANUFACTURER);
     static final Locale RU = new Locale("ru", "RU");
     static final Locale PT = new Locale("pt", "BR");
     /** English, Portuguese, Spanish, German or Russian, from the settings or, with "auto", the TV's own language. */
@@ -53,6 +58,17 @@ final class Ui {
 
     /** Inter at an optical size (14 = text, 32 = display) and weight; the system font if the file is missing. */
     private static Typeface font(AssetManager a, int opticalSize, int weight) {
+        if (Build.VERSION.SDK_INT < 26) {
+            // Android 7 (Fire OS 6): no variable fonts and no numeric weights. Inter's default instance, bold for 600+.
+            Typeface base = Typeface.DEFAULT;
+            if (has(a, FONT)) {
+                try {
+                    base = Typeface.createFromAsset(a, FONT);
+                } catch (RuntimeException ignored) {
+                }
+            }
+            return Typeface.create(base, weight >= 600 ? Typeface.BOLD : Typeface.NORMAL);
+        }
         if (has(a, FONT)) {
             try {
                 Typeface t = new Typeface.Builder(a, FONT)
@@ -61,6 +77,7 @@ final class Ui {
             } catch (RuntimeException ignored) {
             }
         }
+        if (Build.VERSION.SDK_INT < 28) return Typeface.create(Typeface.DEFAULT, weight >= 600 ? Typeface.BOLD : Typeface.NORMAL);
         return Typeface.create(Typeface.DEFAULT, weight, false);
     }
 

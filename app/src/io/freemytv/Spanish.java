@@ -7,6 +7,8 @@ final class Spanish {
     static String text(String english) {
         switch (english) {
             case "Live TV": return "TV en vivo";
+            case "Open": return "Abrir";
+            case "Fire TV Home": return "Inicio de Fire TV";
             case "All Apps": return "Todas las apps";
             case "Settings": return "Ajustes";
             case "Home Settings": return "Ajustes de inicio";

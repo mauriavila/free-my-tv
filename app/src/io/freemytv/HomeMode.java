@@ -116,22 +116,26 @@ final class HomeMode {
 
     /** Asks the main process to switch (the settings screen calls this). */
     static void request(Context c, String mode) {
+        if (Ui.FIRE) return;   // Fire OS: no switching (see Ui.FIRE)
         ModeJob.schedule(c, ModeJob.APPLY, mode, 0);
     }
 
     /** Our home screen crashed 3 times in 5 minutes: give the home screen back to the TV's own (asked by :home). */
     static void requestRevertHome(Context c) {
+        if (Ui.FIRE) return;
         ModeJob.schedule(c, ModeJob.REVERT, null, 0);
     }
 
     /** After the TV boots (and after a TV update): wait for the system to settle and check Free My TV mode. */
     static void bootCheck(Context c) {
+        if (Ui.FIRE) return;
         ensureRemoteService(c, 30_000);
         ModeJob.schedule(c, ModeJob.VERIFY, null, 45_000);
     }
 
     /** After an update of this app: complete Free My TV mode if anything is missing. */
     static void verify(Context c) {
+        if (Ui.FIRE) return;
         ModeJob.schedule(c, ModeJob.VERIFY, null, 0);
     }
 
@@ -180,7 +184,7 @@ final class HomeMode {
             list.add(REMOTE_SERVICE);
         }
         adb.shell(list.isEmpty() ? "settings delete secure enabled_accessibility_services"
-                : "settings put secure enabled_accessibility_services '" + String.join(":", list) + "'");
+                : "settings put secure enabled_accessibility_services '" + android.text.TextUtils.join(":", list) + "'");
         if (on) adb.shell("settings put secure accessibility_enabled 1");
         else if (list.isEmpty() && state(c).optBoolean("accessibilityWasOff")) adb.shell("settings put secure accessibility_enabled 0");
         AppLog.w("remote buttons service " + (on ? "on" : "off"));
@@ -319,7 +323,7 @@ final class HomeMode {
                 List<String> problems = new ArrayList<>(failed);
                 if (!homeOk) problems.add(Ui.tr("o Início original", "the original home screen"));
                 notice(c, Ui.tr("Modo original, mas não consegui religar: ", "Original mode, but I couldn't turn back on: ")
-                        + String.join(", ", problems) + ".");
+                        + android.text.TextUtils.join(", ", problems) + ".");
             }
             busy(c, Ui.tr("Medindo o Início original…", "Measuring the original home screen…"));
             measureHomeTime(c, adb, ORIGINAL);
@@ -434,7 +438,7 @@ final class HomeMode {
             }
             if (!fixed.isEmpty()) {
                 notice(app, (updated ? Ui.tr("A atualização da TV religou ", "The TV update turned back on ")
-                        : Ui.tr("Desliguei o que faltava: ", "Turned off what was missing: ")) + String.join(", ", fixed) + ".");
+                        : Ui.tr("Desliguei o que faltava: ", "Turned off what was missing: ")) + android.text.TextUtils.join(", ", fixed) + ".");
             } else if (updated) {
                 notice(app, Ui.tr("A TV foi atualizada; o Free My TV continua igual.", "The TV was updated; Free My TV is still on."));
             }

@@ -49,10 +49,22 @@ public class SettingsActivity extends Activity {
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (Ui.FIRE && openedFromLauncher(getIntent())) {
+            // Fire TV: the app's icon is the way into the home screen (Amazon keeps the Home button for itself).
+            startActivity(new Intent(this, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            finish();
+            return;
+        }
         Watchdog.install(this);
         Ui.init(this);
         view = new SettingsView(this);
         setContentView(view);
+    }
+
+    /** Opened by the TV's launcher (its icon), not by the home screen's Settings button (an explicit intent). */
+    private static boolean openedFromLauncher(Intent i) {
+        return i != null && Intent.ACTION_MAIN.equals(i.getAction()) && i.getCategories() != null
+                && (i.hasCategory(Intent.CATEGORY_LEANBACK_LAUNCHER) || i.hasCategory(Intent.CATEGORY_LAUNCHER));
     }
 
     @Override protected void onResume() {
@@ -68,6 +80,10 @@ public class SettingsActivity extends Activity {
 
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (Ui.FIRE && openedFromLauncher(intent)) {
+            startActivity(new Intent(this, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return;
+        }
         setIntent(intent);
     }
 
@@ -371,7 +387,7 @@ public class SettingsActivity extends Activity {
         private void drawMain(Canvas c, float seconds) {
             boolean working = busy();
             String busyText = busyText();
-            String mode = freeActive() ? "Free My TV" : Ui.tr("Original", "Original");
+            String mode = Ui.FIRE ? Ui.tr("Abrir", "Open") : freeActive() ? "Free My TV" : Ui.tr("Original", "Original");
             String[] labels = {Ui.tr("Início", "Home Screen"), Ui.tr("Tela de Descanso", "Screensaver"),
                     Ui.tr("Ajustes do Início", "Home Settings"), Ui.tr("Prateleira", "Shelf"),
                     Ui.tr("Botões do Controle", "Remote Buttons"), Ui.tr("Ajustes da TV", "TV Settings")};
@@ -985,6 +1001,10 @@ public class SettingsActivity extends Activity {
             } else if (screen == HOME_SETTINGS) {
                 adjust(1);
                 invalidate();
+                return;
+            } else if (focus == 0 && Ui.FIRE) {
+                // Fire TV: no switching; this row just opens the home screen.
+                activity.startActivity(new Intent(c, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                 return;
             } else if (focus == 0) {
                 if (busy()) return;
