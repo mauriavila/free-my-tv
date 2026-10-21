@@ -8,6 +8,12 @@ final class German {
         switch (english) {
             case "Live TV": return "Live-TV";
             case "Open": return "Öffnen";
+            case "Speaker": return "Lautsprecher";
+            case "Couldn't connect to ": return "Keine Verbindung zu ";
+            case "Disconnected: ": return "Getrennt: ";
+            case "Connecting to ": return "Verbinde mit ";
+            case "Turning Bluetooth on… press again in a moment": return "Bluetooth wird eingeschaltet… gleich noch einmal drücken";
+            case "No paired speaker. Pair it in TV Settings › Bluetooth.": return "Kein gekoppelter Lautsprecher. Koppeln unter TV-Einstellungen › Bluetooth.";
             case "Fire TV Home": return "Fire TV-Startseite";
             case "All Apps": return "Alle Apps";
             case "Settings": return "Einstellungen";

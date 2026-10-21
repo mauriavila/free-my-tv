@@ -81,6 +81,11 @@ final class Prefs {
 
     static void setTheme(String v) { put("theme", v); }
 
+    /** Fire TV: the Bluetooth speaker the "Speaker" shortcut used last (its address), or "". */
+    static String speaker() { return sp().getString("speaker", ""); }
+
+    static void setSpeaker(String address) { put("speaker", address); }
+
     // MARK: - City
 
     static String city() { return sp().getString("city", Config.CITY).trim(); }

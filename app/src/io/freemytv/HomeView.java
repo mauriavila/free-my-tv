@@ -2181,6 +2181,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             openSheet();
             return;
         }
+        if (it.kind == HomeApps.BT_SPEAKER) {
+            BtSpeaker.toggle(getContext());
+            return;
+        }
         if (it.kind == HomeApps.INPUTS) {
             openDrawer();
             for (int i = 0; i < drawerItems.size(); i++) {

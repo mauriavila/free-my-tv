@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Fire TV only (FireWake): whether Amazon's home is in front. Given with adb: appops set io.freemytv GET_USAGE_STATS allow -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <!-- Fire TV only (BtSpeaker): connect the paired Bluetooth speaker from the drawer. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
 
     <!-- Android 11+: without this list the app can't "see" the other apps (getLeanbackLaunchIntentForPackage
          returns null). The shelf and streaming apps, the live TV apps and, through the <intent>, every TV app

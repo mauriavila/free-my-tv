@@ -15,6 +15,12 @@ final class Russian {
         switch (english) {
             case "Live TV": return "Телеканалы";
             case "Open": return "Открыть";
+            case "Speaker": return "Колонка";
+            case "Couldn't connect to ": return "Не удалось подключиться к ";
+            case "Disconnected: ": return "Отключено: ";
+            case "Connecting to ": return "Подключение к ";
+            case "Turning Bluetooth on… press again in a moment": return "Включаю Bluetooth… нажмите ещё раз через секунду";
+            case "No paired speaker. Pair it in TV Settings › Bluetooth.": return "Нет сопряжённой колонки. Подключите её в Настройках ТВ › Bluetooth.";
             case "Fire TV Home": return "Главная Fire TV";
             case "All Apps": return "Приложения";
             case "Settings": return "Настройки";

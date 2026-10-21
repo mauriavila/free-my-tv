@@ -8,6 +8,12 @@ final class Spanish {
         switch (english) {
             case "Live TV": return "TV en vivo";
             case "Open": return "Abrir";
+            case "Speaker": return "Parlante";
+            case "Couldn't connect to ": return "No se pudo conectar a ";
+            case "Disconnected: ": return "Desconectado: ";
+            case "Connecting to ": return "Conectando a ";
+            case "Turning Bluetooth on… press again in a moment": return "Encendiendo el Bluetooth… volvé a apretar en un momento";
+            case "No paired speaker. Pair it in TV Settings › Bluetooth.": return "No hay ningún parlante vinculado. Vinculalo en Ajustes del TV › Bluetooth.";
             case "Fire TV Home": return "Inicio de Fire TV";
             case "All Apps": return "Todas las apps";
             case "Settings": return "Ajustes";

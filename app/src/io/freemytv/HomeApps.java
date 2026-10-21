@@ -60,6 +60,8 @@ final class HomeApps {
     static final int INPUTS = 7;
     /** Fire TV: back to Amazon's own home screen (it keeps the Home button). */
     static final int FIRE_HOME = 8;
+    /** Fire TV: connect or disconnect the Bluetooth speaker (BtSpeaker). */
+    static final int BT_SPEAKER = 9;
     /** Image size of each card (16:9; on screen it shows up to ~330 px wide). */
     static final int TILE_W = 384, TILE_H = 216;
 
@@ -79,7 +81,9 @@ final class HomeApps {
      * Apps on the home shelf, in this order, when installed (up to MAX_SHELF): key, name, package, brand color (for
      * its logo on glass) and how to lift the logo from the app's TV art: "tint" = a white logo takes the art's
      * background color (Prime Video, Globoplay); "play" = the white triangle inside the red button stays white
-     * (YouTube); empty = the art's colors as they are. Last, a visual size tweak for the logo. Edit freely.
+     * (YouTube); empty = the art's colors as they are; "glyph:<symbol>:<end color>" = no logo from the app: our own card,
+     * a gradient from the brand color to the end color with the symbol and the name. Last, a visual size tweak for the
+     * logo. Edit freely.
      */
     private static final String[][] SHELF = {
         {"netflix", "Netflix", "com.netflix.ninja", "E50914", "", "1"},
@@ -88,6 +92,7 @@ final class HomeApps {
         {"prime", "Prime Video", "com.amazon.amazonvideo.livingroom", "1A98FF", "tint", "0.96"},
         {"prime", "Prime Video", "com.amazon.firebat", "1A98FF", "tint", "0.96"},              // Fire TV
         {"disney", "Disney+", "com.disney.disneyplus", "1838C8", "", "1"},
+        {"xuper", "Xuper TV", "com.guardian.tivo.xuper", "6A11CB", "glyph:live_tv:FC2576", "1"},   // Fire TV, our own card
         {"max", "Max", "com.wbd.stream", "6C3BE0", "", "1.32"},
         {"appletv", "Apple TV", "com.apple.atve.androidtv.appletv", "B8BCC6", "", "1.1"},
         {"appletv", "Apple TV", "com.apple.atve.amazon.appletv", "B8BCC6", "", "1.1"},        // Fire TV
@@ -97,7 +102,6 @@ final class HomeApps {
         {"peacock", "Peacock", "com.peacocktv.peacockandroid", "6E55DC", "", "1"},
         {"globoplay", "Globoplay", "com.globo.globotv", "FF5A1F", "tint", "1"},
         {"spotify", "Spotify", "com.spotify.tv.android", "1DB954", "", "1"},
-        {"crunchyroll", "Crunchyroll", "com.crunchyroll.crunchyroid", "F47521", "", "1"},
     };
     static final int MAX_SHELF = 8;
     /** Live TV apps of some brands (the antenna's channels open through the standard Android request first). */
@@ -143,6 +147,12 @@ final class HomeApps {
                 it.key = pkg;
                 it.label = ri != null ? String.valueOf(ri.loadLabel(pm)) : pkg;
                 it.tile = appTile(c, null, pkg, 0);
+            } else if (d[4].startsWith("glyph:")) {
+                it.key = d[0];
+                it.label = d[1];
+                String[] g = d[4].split(":");
+                it.tile = glyphTile(c, d[0], d[1], g[1], 0xFF000000 | Integer.parseInt(d[3], 16),
+                        0xFF000000 | Integer.parseInt(g[2], 16));
             } else {
                 it.key = d[0];
                 it.label = d[1];
@@ -222,6 +232,7 @@ final class HomeApps {
     /** Shortcuts in the bottom drawer. */
     static List<Item> drawerShortcuts() {
         List<Item> items = new ArrayList<>();
+        if (BtSpeaker.supported()) items.add(shortcut(BT_SPEAKER, "speaker", Ui.tr("Caixa de som", "Speaker"), "speaker"));
         items.add(shortcut(ALL_APPS, "all", Ui.tr("Todos os Apps", "All Apps"), "apps"));
         items.add(shortcut(SETTINGS, "settings", Ui.tr("Ajustes do Início", "Home Settings"), "settings"));
         items.add(shortcut(ANDROID_SETTINGS, "tv-settings", Ui.tr("Ajustes da TV", "TV Settings"), "tv_settings"));
@@ -831,6 +842,33 @@ final class HomeApps {
         if (TILES.containsKey(key)) return TILES.get(key);
         Bitmap b = darkTile();
         Symbols.draw(c, new Canvas(b), symbol, TILE_W / 2f, TILE_H / 2f, TILE_H * 0.36f, 0xF2FFFFFF);
+        b.setHasMipMap(true);
+        TILES.put(key, b);
+        return b;
+    }
+
+    /** Our own card for an app without a usable logo: a diagonal gradient, its symbol and its name, in white. */
+    private static synchronized Bitmap glyphTile(Context c, String key, String name, String symbol, int from, int to) {
+        if (TILES.containsKey(key)) return TILES.get(key);
+        Bitmap b = Bitmap.createBitmap(TILE_W, TILE_H, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(b);
+        Paint bg = new Paint();
+        bg.setShader(new LinearGradient(0, 0, TILE_W, TILE_H, from, to, Shader.TileMode.CLAMP));
+        canvas.drawRect(0, 0, TILE_W, TILE_H, bg);
+        // A soft light from the top left, like the glass of the other cards.
+        Paint shine = new Paint();
+        shine.setShader(new RadialGradient(TILE_W * 0.2f, 0, TILE_W * 0.9f, 0x33FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+        canvas.drawRect(0, 0, TILE_W, TILE_H, shine);
+        Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
+        text.setTypeface(Ui.displaySemibold != null ? Ui.displaySemibold : android.graphics.Typeface.DEFAULT_BOLD);
+        text.setColor(0xFFFFFFFF);
+        text.setTextSize(TILE_H * 0.24f);
+        float glyph = TILE_H * 0.36f, gap = TILE_H * 0.08f;
+        float gw = Symbols.width(c, symbol, glyph), tw = text.measureText(name);
+        float left = (TILE_W - gw - gap - tw) / 2f;
+        Symbols.draw(c, canvas, symbol, left + gw / 2f, TILE_H / 2f, glyph, 0xFFFFFFFF);
+        Paint.FontMetrics fm = text.getFontMetrics();
+        canvas.drawText(name, left + gw + gap, TILE_H / 2f - (fm.ascent + fm.descent) / 2f, text);
         b.setHasMipMap(true);
         TILES.put(key, b);
         return b;
