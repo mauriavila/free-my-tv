@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- After the TV boots (and after a TV update), checks that Free My TV mode is still as you left it. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Fire TV only (FireWake): whether Amazon's home is in front. Given with adb: appops set io.freemytv GET_USAGE_STATS allow -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
 
     <!-- Android 11+: without this list the app can't "see" the other apps (getLeanbackLaunchIntentForPackage
          returns null). The shelf and streaming apps, the live TV apps and, through the <intent>, every TV app
@@ -139,6 +141,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/remote_key_service" />
         </service>
+
+        <!-- Fire TV only: opens the home screen over Amazon's after waking up or booting (see FireWake). -->
+        <service
+            android:name=".FireWake"
+            android:exported="false" />
 
         <receiver
             android:name=".HomeReceiver"

@@ -24,6 +24,17 @@ adb push tmdb_key.txt /sdcard/Android/data/io.freemytv/files/tmdb_key.txt
 
 Open Free My TV again and the picks appear within a minute.
 
+## Opening it after waking up
+
+`FireWake` opens Free My TV over Amazon's home when the stick wakes up or boots, only while Amazon's home is in front.
+To know what's in front it needs usage access, once:
+
+```
+adb shell appops set io.freemytv GET_USAGE_STATS allow
+```
+
+The Home button still goes to Amazon's home: Fire OS 6 doesn't let apps take it.
+
 ## What changes on Fire TV
 
 - The app's icon opens the home screen; Settings is the round button at the top right.
