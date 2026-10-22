@@ -13,13 +13,15 @@ import android.os.Looper;
 
 /**
  * Fire TV only: Amazon keeps the Home button and the screen after waking for its own home screen, so this small
- * service in the main process opens Free My TV over it when the stick wakes up (screen on, screensaver ends) or
- * boots, but only while Amazon's home is in front: never over a video or another app. Knowing what's in front needs
+ * service in the main process opens Free My TV over it when the stick wakes up (screen on, screensaver ends, the TV
+ * turning on over HDMI) or boots, but only while Amazon's home is in front: never over a video or another app. Fire OS
+ * records its home coming back a little late, so it looks three times (1.5, 4 and 8 s after). Knowing what's in front needs
  * usage access, given once with adb: appops set io.freemytv GET_USAGE_STATS allow. Without it, only waking from
  * sleep (screen on) opens it, since Fire OS shows its own home after sleep anyway.
  */
 public class FireWake extends Service {
     static final String AMAZON_HOME = "com.amazon.tv.launcher";
+    private static final String HDMI_PLUGGED = "android.intent.action.HDMI_PLUGGED";   // the TV turned on or off
     private final Handler main = new Handler(Looper.getMainLooper());
     private BroadcastReceiver receiver;
 
@@ -44,14 +46,27 @@ public class FireWake extends Service {
         super.onCreate();
         receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
-                final boolean screenOn = Intent.ACTION_SCREEN_ON.equals(intent.getAction());
-                // A moment for Fire OS to bring its home screen back to the front first.
-                main.postDelayed(() -> openIfAmazonHome(getApplicationContext(), screenOn), 1500);
+                if (isInitialStickyBroadcast()) return;   // HDMI's last state, sent on registering
+                String action = intent.getAction();
+                if (HDMI_PLUGGED.equals(action) && !intent.getBooleanExtra("state", false)) return;
+                if (android.media.AudioManager.ACTION_HDMI_AUDIO_PLUG.equals(action)
+                        && intent.getIntExtra(android.media.AudioManager.EXTRA_AUDIO_PLUG_STATE, 0) != 1) return;
+                final boolean wokeUp = !Intent.ACTION_DREAMING_STOPPED.equals(action);
+                AppLog.w("fire wake: " + action);
+                main.removeCallbacksAndMessages(null);
+                // Moments for Fire OS to bring its home screen back to the front first.
+                for (long delay : new long[] {1500, 4000, 8000}) {
+                    main.postDelayed(() -> {
+                        if (openIfAmazonHome(getApplicationContext(), wokeUp)) main.removeCallbacksAndMessages(null);
+                    }, delay);
+                }
             }
         };
         IntentFilter f = new IntentFilter();
         f.addAction(Intent.ACTION_SCREEN_ON);
         f.addAction(Intent.ACTION_DREAMING_STOPPED);
+        f.addAction(HDMI_PLUGGED);
+        f.addAction(android.media.AudioManager.ACTION_HDMI_AUDIO_PLUG);
         registerReceiver(receiver, f);
     }
 
@@ -67,15 +82,22 @@ public class FireWake extends Service {
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
-    /** Opens the home screen if Amazon's is in front (or, without usage access, only right after waking up). */
-    static void openIfAmazonHome(Context c, boolean wokeUp) {
+    /**
+     * Opens the home screen if Amazon's is in front (or, without usage access, only right after waking up); true if
+     * opened. Free My TV "in front" right after waking can be a stale record from before the sleep, so the later looks
+     * still happen.
+     */
+    static boolean openIfAmazonHome(Context c, boolean wokeUp) {
         String front = foreground(c);
-        if (front == null ? !wokeUp : !AMAZON_HOME.equals(front)) return;
+        AppLog.w("fire wake: in front: " + front);
+        if (front == null ? !wokeUp : !AMAZON_HOME.equals(front)) return false;
         try {
             c.startActivity(new Intent(c, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             AppLog.w("fire wake: opened over Amazon's home");
+            return true;
         } catch (RuntimeException e) {
             AppLog.w("fire wake: couldn't open: " + e.getMessage());
+            return false;
         }
     }
 
