@@ -145,6 +145,29 @@
                 android:resource="@xml/remote_key_service" />
         </service>
 
+        <!-- Fire TV: karaoke, the lyrics of what Spotify plays, in sync (see KaraokeActivity). -->
+        <activity
+            android:name=".KaraokeActivity"
+            android:process=":home"
+            android:exported="false"
+            android:label="Karaoke"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|locale|layoutDirection"
+            android:theme="@style/FreeMyTV.Home" />
+
+        <!-- What's playing, for the karaoke (reads no notifications). Turned on with adb on Fire TV. -->
+        <service
+            android:name=".MediaListener"
+            android:exported="true"
+            android:label="Free My TV"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- Fire TV only: opens the home screen over Amazon's after waking up or booting (see FireWake). -->
         <service
             android:name=".FireWake"

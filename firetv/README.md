@@ -35,6 +35,17 @@ adb shell appops set io.freemytv GET_USAGE_STATS allow
 
 The Home button still goes to Amazon's home: Fire OS 6 doesn't let apps take it.
 
+## Karaoke
+
+*Karaoke* in the drawer shows the lyrics of what Spotify (or any music app) plays, synced line by line, over a
+moving background in the album's colors. Lyrics come from LRCLIB (lrclib.net). It needs to see what's playing, once:
+
+```
+adb shell settings put secure enabled_notification_listeners io.freemytv/io.freemytv.MediaListener
+```
+
+On the remote: ◀ ▶ move the lyrics earlier or later, OK pauses, ⏪ ⏩ change the song, Back leaves.
+
 ## What changes on Fire TV
 
 - The app's icon opens the home screen; Settings is the round button at the top right.

@@ -64,6 +64,8 @@ final class HomeApps {
     static final int BT_SPEAKER = 9;
     /** Fire TV: connect the VPN (QuickVpn). */
     static final int VPN = 10;
+    /** Fire TV: the karaoke screen (KaraokeActivity). */
+    static final int KARAOKE = 11;
     /** Image size of each card (16:9; on screen it shows up to ~330 px wide). */
     static final int TILE_W = 384, TILE_H = 216;
 
@@ -234,6 +236,7 @@ final class HomeApps {
     /** Shortcuts in the bottom drawer. */
     static List<Item> drawerShortcuts(Context c) {
         List<Item> items = new ArrayList<>();
+        if (Ui.FIRE) items.add(shortcut(KARAOKE, "karaoke", Ui.tr("Karaokê", "Karaoke", "Karaoke"), "mic"));
         if (QuickVpn.supported(c)) items.add(shortcut(VPN, "vpn", "VPN", "vpn_lock"));
         if (BtSpeaker.supported()) items.add(shortcut(BT_SPEAKER, "speaker", Ui.tr("Caixa de som", "Speaker"), "speaker"));
         items.add(shortcut(ALL_APPS, "all", Ui.tr("Todos os Apps", "All Apps"), "apps"));
@@ -397,6 +400,9 @@ final class HomeApps {
                 break;
             case ANDROID_SETTINGS:
                 intent = new Intent(Settings.ACTION_SETTINGS);
+                break;
+            case KARAOKE:
+                intent = new Intent(a, KaraokeActivity.class);
                 break;
             case FIRE_HOME:
                 intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).setPackage("com.amazon.tv.launcher");
