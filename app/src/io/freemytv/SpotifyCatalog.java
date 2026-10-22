@@ -45,7 +45,8 @@ final class SpotifyCatalog {
 
     static synchronized List<Track> search(Context c, String query, String market) throws Exception {
         String bearer = token(c);
-        String url = "https://api.spotify.com/v1/search?type=track&limit=12&market=" + market + "&q="
+        // Development Mode apps: 10 results at most per request (since February 2026).
+        String url = "https://api.spotify.com/v1/search?type=track&limit=10&market=" + market + "&q="
                 + URLEncoder.encode(query, "UTF-8");
         HttpURLConnection h = (HttpURLConnection) new URL(url).openConnection();
         h.setConnectTimeout(10_000);
@@ -55,7 +56,11 @@ final class SpotifyCatalog {
         try {
             int code = h.getResponseCode();
             if (code == 401) { token = null; throw new java.io.IOException("Spotify rejected the token"); }
-            if (code != 200) throw new java.io.IOException("Spotify HTTP " + code);
+            if (code != 200) {
+                String why = "";
+                try { why = new JSONObject(read(h.getErrorStream())).optJSONObject("error").optString("message"); } catch (Exception ignored) { }
+                throw new java.io.IOException("Spotify HTTP " + code + (why.isEmpty() ? "" : ": " + why));
+            }
             JSONArray items = new JSONObject(read(h.getInputStream())).getJSONObject("tracks").getJSONArray("items");
             for (int i = 0; i < items.length(); i++) {
                 JSONObject t = items.getJSONObject(i);
