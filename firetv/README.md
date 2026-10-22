@@ -37,16 +37,22 @@ The Home button still goes to Amazon's home: Fire OS 6 doesn't let apps take it.
 
 ## Karaoke
 
-*Karaoke* in the drawer shows the lyrics of what Spotify (or any music app) plays, synced line by line, over a
-moving background in the album's colors. Lyrics come from LRCLIB (lrclib.net). It needs to see what's playing, once:
+*Karaoke* in the drawer is a whole karaoke in one screen: ▲ searches Spotify's catalog and lists the songs with their
+covers; OK plays one in Spotify's app, in the background (`playFromUri` on its media session), so you never leave.
+The lyrics glide line by line, the one being sung filling up as it goes, over a moving background in the album's
+colors. Lyrics: LRCLIB, then NetEase Cloud Music, then lyrics.ovh (text only). Songs queued from phones show up too.
+
+Once:
 
 ```
 adb shell settings put secure enabled_notification_listeners io.freemytv/io.freemytv.MediaListener
+adb push spotify_key.txt /sdcard/Android/data/io.freemytv/files/spotify_key.txt
 ```
 
-On the remote: ▲ searches a song (Spotify plays the best match), ▼ opens Spotify to pick one (the karaoke comes back
-as soon as it starts), ◀ ▶ move the lyrics earlier or later, OK pauses, ⏪ ⏩ change the song, Back leaves. Songs
-queued from phones (Spotify Connect) show up by themselves.
+`spotify_key.txt` is one line, `CLIENT_ID:CLIENT_SECRET`, from your own free app at developer.spotify.com (Web API).
+Without it, ▲ opens Spotify's own search instead, and the karaoke comes back when a song starts.
+
+Remote: ▲ search, ◀ ▶ move the lyrics earlier or later, OK pause, ⏪ ⏩ previous or next song, ▼ Spotify, Back leaves.
 
 ## What changes on Fire TV
 

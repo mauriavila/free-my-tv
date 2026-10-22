@@ -3,6 +3,7 @@ package io.freemytv;
 import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
@@ -14,15 +15,20 @@ import android.graphics.Paint;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.drawable.GradientDrawable;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.InputType;
+import android.util.TypedValue;
 import android.view.Choreographer;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -31,11 +37,6 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.Toast;
-import android.content.Intent;
-import android.net.Uri;
-import android.text.InputType;
-import android.util.TypedValue;
-import android.view.Gravity;
 
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -48,22 +49,23 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Karaoke: while Spotify (or any music app) plays, the song's lyrics in large type, synced line by line, the line
- * being sung filling up as it goes, over a slowly moving background in the album's colors. The music keeps its
- * original vocals: this is for singing along. Lyrics come from LRCLIB (Lyrics). Seeing what plays needs the
- * notification listener (MediaListener), turned on once with adb.
- * Remote: ← → move the lyrics earlier or later (if they run ahead or behind), OK pauses, ⏪ ⏩ change the song,
- * ↑ searches a song (typed or dictated; Spotify plays it through its own "play from search"), ↓ opens Spotify to pick one
- * there: as soon as a new song starts, the karaoke comes back by itself. It keeps following the music from behind.
+ * Karaoke, all from one screen: ▲ searches Spotify's catalog (SpotifyCatalog) and shows a list of songs with their
+ * covers; OK on one makes Spotify's own app play it in the background (playFromUri on its media session), so the
+ * karaoke never leaves. While it plays, the lyrics (Lyrics: LRCLIB, NetEase, lyrics.ovh) scroll smoothly in large
+ * type, the line being sung filling up as it goes, over a slowly moving background in the album's colors. The music
+ * keeps its original vocals: this is for singing along. Songs queued from phones (Spotify Connect) show up too.
+ * Seeing and steering what plays needs the notification listener (MediaListener), turned on once with adb.
+ * Remote: ▲ search, ◀ ▶ lyrics earlier or later, OK pause, ⏪ ⏩ previous or next song, ▼ Spotify's own screen.
  */
 public class KaraokeActivity extends Activity {
     static final String LISTENER = "io.freemytv/io.freemytv.MediaListener";
+    static final String SPOTIFY = "com.spotify.tv.android";
 
     private static final int NO_ACCESS = 0, WAITING = 1, LOADING = 2, NO_LYRICS = 3, INSTRUMENTAL = 4, READY = 5;
     private static final Map<String, Lyrics> CACHE = new HashMap<>();   // this process's songs, found or not (null)
 
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final ExecutorService io = Executors.newFixedThreadPool(2);
     private KaraokeView view;
     private MediaSessionManager sessions;
     private ComponentName listener;
@@ -74,8 +76,16 @@ public class KaraokeActivity extends Activity {
     private Lyrics lyrics;
     private long offsetMs, offsetShownAt = -10_000;
     private boolean resumed, returnOnNextSong;
+    private String pendingUri;           // a song to play as soon as Spotify's session shows up
+
+    // Search and the song list
     private EditText search;
-    static final String SPOTIFY = "com.spotify.tv.android";
+    private String query = "";
+    private List<SpotifyCatalog.Track> results;   // non-null: the list is showing
+    private int resultIndex;
+    private boolean searching;
+    private String searchError;
+    private final Map<String, Bitmap> thumbs = new HashMap<>();
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -87,19 +97,17 @@ public class KaraokeActivity extends Activity {
         search = makeSearchBox();
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
         int side = (int) (getResources().getDisplayMetrics().widthPixels * 0.22f);
-        lp.setMargins(side, (int) (getResources().getDisplayMetrics().heightPixels * 0.2f), side, 0);
+        lp.setMargins(side, (int) (getResources().getDisplayMetrics().heightPixels * 0.18f), side, 0);
         root.addView(search, lp);
         setContentView(root);
         getWindow().setBackgroundDrawable(null);
-        // Followed from creation to the end, not only while in front: a song picked in Spotify brings us back.
-        connect();
+        connect();   // followed from creation to the end, also from behind
     }
 
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
-        if (state == NO_ACCESS) { disconnect(); connect(); }
-        else refreshQuietly();
+        if (state == NO_ACCESS) { disconnect(); connect(); } else refresh();
         view.start();
     }
 
@@ -113,98 +121,6 @@ public class KaraokeActivity extends Activity {
         disconnect();
         io.shutdownNow();
         super.onDestroy();
-    }
-
-    private void refreshQuietly() {
-        try {
-            if (sessions != null) pick(sessions.getActiveSessions(listener));
-        } catch (SecurityException e) {
-            state = NO_ACCESS;
-        }
-    }
-
-    // MARK: - Choosing songs without leaving
-
-    private EditText makeSearchBox() {
-        EditText e = new EditText(this);
-        e.setSingleLine(true);
-        e.setInputType(InputType.TYPE_CLASS_TEXT);
-        e.setImeOptions(EditorInfo.IME_ACTION_SEARCH | EditorInfo.IME_FLAG_NO_FULLSCREEN);
-        e.setHint(Ui.tr("Música ou artista…", "Song or artist…", "Canción o artista…"));
-        e.setTextColor(0xFFFFFFFF);
-        e.setHintTextColor(0x99FFFFFF);
-        e.setTextSize(TypedValue.COMPLEX_UNIT_PX, getResources().getDisplayMetrics().widthPixels / 1920f * 44);
-        e.setTypeface(Ui.medium);
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-        bg.setColor(0xCC15151C);
-        bg.setStroke(3, 0x66FFFFFF);
-        bg.setCornerRadius(44);
-        e.setBackground(bg);
-        int pad = (int) (getResources().getDisplayMetrics().widthPixels / 1920f * 34);
-        e.setPadding(pad, pad / 2, pad, pad / 2);
-        e.setVisibility(View.GONE);
-        e.setOnEditorActionListener((v, actionId, event) -> {
-            String q = v.getText().toString().trim();
-            closeSearch();
-            if (!q.isEmpty()) play(q);
-            return true;
-        });
-        return e;
-    }
-
-    private void openSearch() {
-        search.setText("");
-        search.setVisibility(View.VISIBLE);
-        search.requestFocus();
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null) imm.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT);
-    }
-
-    private void closeSearch() {
-        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (imm != null) imm.hideSoftInputFromWindow(search.getWindowToken(), 0);
-        search.setVisibility(View.GONE);
-        view.requestFocus();
-    }
-
-    /** Spotify plays the best match through its own "play from search"; else its search opens, and we come back. */
-    private void play(String query) {
-        PlaybackState s = controller == null ? null : controller.getPlaybackState();
-        boolean canSearch = controller != null && controller.getPackageName().contains("spotify") && s != null
-                && (s.getActions() & PlaybackState.ACTION_PLAY_FROM_SEARCH) != 0;
-        if (canSearch) {
-            controller.getTransportControls().playFromSearch(query, new Bundle());
-            Toast.makeText(this, Ui.tr("Tocando: ", "Playing: ", "Poniendo: ") + query, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + Uri.encode(query))).setPackage(SPOTIFY);
-        if (!openSpotify(i)) openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
-    }
-
-    /** Spotify in front; the karaoke returns as soon as a new song starts there. */
-    private boolean openSpotify(Intent i) {
-        if (i == null) return false;
-        try {
-            returnOnNextSong = true;
-            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            Toast.makeText(this, Ui.tr("Escolha uma música: o karaokê volta sozinho", "Pick a song: the karaoke comes back by itself",
-                    "Elegí una canción: el karaoke vuelve solo"), Toast.LENGTH_LONG).show();
-            return true;
-        } catch (RuntimeException e) {
-            returnOnNextSong = false;
-            return false;
-        }
-    }
-
-    private void comeBack() {
-        if (resumed || !returnOnNextSong) return;
-        returnOnNextSong = false;
-        try {
-            startActivity(new Intent(this, KaraokeActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
-        } catch (RuntimeException e) {
-            AppLog.w("karaoke: couldn't come back: " + e.getMessage());
-        }
     }
 
     // MARK: - What's playing
@@ -239,7 +155,7 @@ public class KaraokeActivity extends Activity {
 
     private void refresh() {
         try {
-            pick(sessions.getActiveSessions(listener));
+            if (sessions != null) pick(sessions.getActiveSessions(listener));
         } catch (SecurityException e) {
             state = NO_ACCESS;
         }
@@ -255,22 +171,30 @@ public class KaraokeActivity extends Activity {
             int score = (m.getPackageName().contains("spotify") ? 2 : 0) + (playing ? 4 : 0);
             if (score > bestScore) { bestScore = score; best = m; }
         }
-        if (controller != null && best != null && controller.getSessionToken().equals(best.getSessionToken())) return;
-        if (controller != null) controller.unregisterCallback(callback);
-        controller = best;
-        if (controller == null) {
-            setWaiting();
-            return;
+        boolean same = controller != null && best != null && controller.getSessionToken().equals(best.getSessionToken());
+        if (!same) {
+            if (controller != null) controller.unregisterCallback(callback);
+            controller = best;
+            if (controller != null) controller.registerCallback(callback, main);
         }
-        controller.registerCallback(callback, main);
-        onMetadata(controller.getMetadata());
+        if (controller != null && pendingUri != null && canPlayUri()) {
+            String uri = pendingUri;
+            pendingUri = null;
+            controller.getTransportControls().playFromUri(Uri.parse(uri), new Bundle());
+            returnOnNextSong = true;
+            AppLog.w("karaoke: played the waiting song once Spotify was up");
+        }
+        if (same) return;
+        if (controller == null) setWaiting(); else onMetadata(controller.getMetadata());
     }
 
     private void setWaiting() {
         state = WAITING;
         trackKey = "";
         lyrics = null;
-        view.setSong("", "", null);
+        title = "";
+        artist = "";
+        view.setSong(null);
     }
 
     private void onMetadata(MediaMetadata m) {
@@ -287,19 +211,19 @@ public class KaraokeActivity extends Activity {
         boolean same = key.equals(trackKey);
         title = t;
         artist = a;
-        if (!same || (art != null && art != view.art)) view.setSong(t, a, art);
+        if (!same || (art != null && art != view.art)) view.setSong(art);
         if (art == null) {
             final String uri = text(m, MediaMetadata.METADATA_KEY_ALBUM_ART_URI, MediaMetadata.METADATA_KEY_ART_URI);
             if (uri.startsWith("http")) io.execute(() -> {
-                Bitmap b = download(uri);
-                if (b != null) main.post(() -> { if (key.equals(trackKey)) view.setSong(title, artist, b); });
+                Bitmap b = download(uri, 2);
+                if (b != null) main.post(() -> { if (key.equals(trackKey)) view.setSong(b); });
             });
         }
         if (same) return;
         trackKey = key;
-        comeBack();
         offsetMs = 0;
         lyrics = null;
+        comeBack();
         if (CACHE.containsKey(key)) {
             show(CACHE.get(key));
             return;
@@ -326,14 +250,14 @@ public class KaraokeActivity extends Activity {
         return v == null ? "" : v.toString().trim();
     }
 
-    private static Bitmap download(String url) {
+    private static Bitmap download(String url, int sample) {
         try {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(8000);
             c.setReadTimeout(10_000);
             try (InputStream in = c.getInputStream()) {
                 BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inSampleSize = 2;
+                o.inSampleSize = sample;
                 return BitmapFactory.decodeStream(in, null, o);
             } finally {
                 c.disconnect();
@@ -359,28 +283,183 @@ public class KaraokeActivity extends Activity {
         return s != null && s.getState() == PlaybackState.STATE_PLAYING;
     }
 
+    // MARK: - Search and the song list
+
+    private EditText makeSearchBox() {
+        EditText e = new EditText(this);
+        float k = getResources().getDisplayMetrics().widthPixels / 1920f;
+        e.setSingleLine(true);
+        e.setInputType(InputType.TYPE_CLASS_TEXT);
+        e.setImeOptions(EditorInfo.IME_ACTION_SEARCH | EditorInfo.IME_FLAG_NO_FULLSCREEN);
+        e.setHint(Ui.tr("Música ou artista…", "Song or artist…", "Canción o artista…"));
+        e.setTextColor(0xFFFFFFFF);
+        e.setHintTextColor(0x99FFFFFF);
+        e.setTextSize(TypedValue.COMPLEX_UNIT_PX, 44 * k);
+        e.setTypeface(Ui.medium);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xE015151C);
+        bg.setStroke(Math.max(2, Math.round(3 * k)), 0x66FFFFFF);
+        bg.setCornerRadius(44 * k);
+        e.setBackground(bg);
+        int pad = Math.round(34 * k);
+        e.setPadding(pad, pad / 2, pad, pad / 2);
+        e.setVisibility(View.GONE);
+        e.setOnEditorActionListener((v, actionId, event) -> {
+            String q = v.getText().toString().trim();
+            closeSearch();
+            if (!q.isEmpty()) runSearch(q);
+            return true;
+        });
+        return e;
+    }
+
+    private void openSearch() {
+        search.setText(query);
+        search.setSelection(search.getText().length());
+        search.setVisibility(View.VISIBLE);
+        search.requestFocus();
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    private void closeSearch() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(search.getWindowToken(), 0);
+        search.setVisibility(View.GONE);
+        view.requestFocus();
+    }
+
+    private void runSearch(final String q) {
+        query = q;
+        if (!SpotifyCatalog.configured(this)) {
+            // No keys yet: Spotify's own search, and back here as soon as a song starts.
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + Uri.encode(q))).setPackage(SPOTIFY);
+            if (!openSpotify(i)) openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
+            return;
+        }
+        results = new ArrayList<>();
+        resultIndex = 0;
+        searching = true;
+        searchError = null;
+        final String region = Config.TMDB_REGION.trim().toUpperCase(java.util.Locale.ROOT);
+        final String market = region.length() == 2 ? region : "US";
+        io.execute(() -> {
+            List<SpotifyCatalog.Track> found = null;
+            String error = null;
+            try {
+                found = SpotifyCatalog.search(this, q, market);
+            } catch (Exception e) {
+                error = e.getMessage();
+                AppLog.w("karaoke search: " + error);
+            }
+            final List<SpotifyCatalog.Track> list = found;
+            final String err = error;
+            main.post(() -> {
+                if (results == null || !q.equals(query)) return;
+                searching = false;
+                searchError = err;
+                results = list == null ? new ArrayList<SpotifyCatalog.Track>() : list;
+                loadThumbs(results);
+            });
+        });
+    }
+
+    private void loadThumbs(List<SpotifyCatalog.Track> list) {
+        for (final SpotifyCatalog.Track t : list) {
+            if (t.image.isEmpty() || thumbs.containsKey(t.image)) continue;
+            thumbs.put(t.image, null);
+            io.execute(() -> {
+                Bitmap b = download(t.image, 1);
+                if (b != null) main.post(() -> thumbs.put(t.image, b));
+            });
+        }
+    }
+
+    private boolean canPlayUri() {
+        PlaybackState s = controller == null ? null : controller.getPlaybackState();
+        return controller != null && controller.getPackageName().contains("spotify")
+                && (s == null || (s.getActions() & PlaybackState.ACTION_PLAY_FROM_URI) != 0);
+    }
+
+    /** Spotify plays it in the background; if Spotify isn't running yet, it opens, plays it, and we come back. */
+    private void play(SpotifyCatalog.Track t) {
+        results = null;
+        if (canPlayUri()) {
+            controller.getTransportControls().playFromUri(Uri.parse(t.uri()), new Bundle());
+            Toast.makeText(this, Ui.tr("Tocando: ", "Playing: ", "Poniendo: ") + t.name, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        pendingUri = t.uri();
+        openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
+    }
+
+    /** Spotify in front; the karaoke returns as soon as a new song starts there. */
+    private boolean openSpotify(Intent i) {
+        if (i == null) return false;
+        try {
+            returnOnNextSong = true;
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return true;
+        } catch (RuntimeException e) {
+            returnOnNextSong = false;
+            return false;
+        }
+    }
+
+    private void comeBack() {
+        if (resumed || !returnOnNextSong) return;
+        returnOnNextSong = false;
+        // A moment for Spotify to settle, then back in front.
+        main.postDelayed(() -> {
+            try {
+                startActivity(new Intent(this, KaraokeActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+                AppLog.w("karaoke: back in front");
+            } catch (RuntimeException e) {
+                AppLog.w("karaoke: couldn't come back: " + e.getMessage());
+            }
+        }, 600);
+    }
+
     // MARK: - Remote
 
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
         int code = e.getKeyCode();
+        boolean down = e.getAction() == KeyEvent.ACTION_DOWN, first = down && e.getRepeatCount() == 0;
         if (search.getVisibility() == View.VISIBLE) {
-            if (code == KeyEvent.KEYCODE_BACK && e.getAction() == KeyEvent.ACTION_UP) { closeSearch(); return true; }
-            if (code == KeyEvent.KEYCODE_BACK) return true;
+            if (code == KeyEvent.KEYCODE_BACK) { if (!down) closeSearch(); return true; }
             return super.dispatchKeyEvent(e);
         }
+        if (results != null) {   // the song list
+            if (code == KeyEvent.KEYCODE_BACK) { if (!down) results = null; return true; }
+            if (!down) return true;
+            switch (code) {
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    if (resultIndex == 0 && first) { results = null; openSearch(); }
+                    else resultIndex = Math.max(0, resultIndex - 1);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    resultIndex = Math.min(Math.max(0, results.size() - 1), resultIndex + 1);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                    if (first && resultIndex < results.size()) play(results.get(resultIndex));
+                    return true;
+                default:
+                    return true;
+            }
+        }
         if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_HOME) return super.dispatchKeyEvent(e);
-        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0
-                && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_SEARCH)) {
-            openSearch();
-            return true;
-        }
-        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0 && code == KeyEvent.KEYCODE_DPAD_DOWN) {
-            openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
-            return true;
-        }
-        if (e.getAction() != KeyEvent.ACTION_DOWN) return isOurs(code) || super.dispatchKeyEvent(e);
+        if (!down) return isOurs(code) || super.dispatchKeyEvent(e);
         MediaController.TransportControls tc = controller == null ? null : controller.getTransportControls();
         switch (code) {
+            case KeyEvent.KEYCODE_DPAD_UP:
+            case KeyEvent.KEYCODE_SEARCH:
+                if (first) openSearch();
+                return true;
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                if (first) openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
+                return true;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
                 offsetMs += 250;   // the lyrics were late: show them earlier
                 offsetShownAt = SystemClock.uptimeMillis();
@@ -392,15 +471,15 @@ public class KaraokeActivity extends Activity {
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
             case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                if (tc != null && e.getRepeatCount() == 0) { if (playing()) tc.pause(); else tc.play(); }
+                if (tc != null && first) { if (playing()) tc.pause(); else tc.play(); }
                 return true;
             case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
             case KeyEvent.KEYCODE_MEDIA_NEXT:
-                if (tc != null && e.getRepeatCount() == 0) tc.skipToNext();
+                if (tc != null && first) tc.skipToNext();
                 return true;
             case KeyEvent.KEYCODE_MEDIA_REWIND:
             case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
-                if (tc != null && e.getRepeatCount() == 0) tc.skipToPrevious();
+                if (tc != null && first) tc.skipToPrevious();
                 return true;
             default:
                 return super.dispatchKeyEvent(e);
@@ -409,8 +488,8 @@ public class KaraokeActivity extends Activity {
 
     private static boolean isOurs(int code) {
         switch (code) {
-            case KeyEvent.KEYCODE_DPAD_RIGHT: case KeyEvent.KEYCODE_DPAD_LEFT: case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_DPAD_UP: case KeyEvent.KEYCODE_DPAD_DOWN: case KeyEvent.KEYCODE_SEARCH:
+            case KeyEvent.KEYCODE_DPAD_RIGHT: case KeyEvent.KEYCODE_DPAD_LEFT: case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER: case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE: case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
             case KeyEvent.KEYCODE_MEDIA_NEXT: case KeyEvent.KEYCODE_MEDIA_REWIND: case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
                 return true;
@@ -425,8 +504,10 @@ public class KaraokeActivity extends Activity {
         private boolean running;
         private float k = 1, w = 1920, h = 1080;
         private final long start = SystemClock.uptimeMillis();
+        private long lastFrame;
 
         // Background: the album art, tiny and stretched (as soft as a heavy blur), and three moving lights in its colors.
+        Bitmap art;
         private Bitmap tiny;
         private final Paint bgPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
         private final Paint blob = new Paint();
@@ -436,19 +517,16 @@ public class KaraokeActivity extends Activity {
         private long songAt = -10_000;
         private final RectF rect = new RectF();
 
-        // Header
-        private Bitmap art;
         private Shader artShader;
         private final Paint artPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        private Paint titleP, artistP, hintP, bigP, smallP, nextP, stateP, cmdP, pillP;
+        private final Paint thumbPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private Paint titleP, artistP, hintP, lineP, stateP, cmdP, pillP, rowTitleP, rowSubP, sourceP;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint spin = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-        // Lyrics layout, redone when the line changes
-        private int shownIndex = -2;
-        private long scrollAt = -10_000;
-        private final List<String> wrapped = new ArrayList<>();
-        private float bigSize;
+        // Lyrics: a smooth scroll position in lines (it glides to the line being sung).
+        private float scroll = -1;
+        private float listScroll;
 
         KaraokeView(Context c) {
             super(c);
@@ -457,6 +535,7 @@ public class KaraokeActivity extends Activity {
 
         void start() {
             running = true;
+            lastFrame = SystemClock.uptimeMillis();
             Choreographer.getInstance().postFrameCallback(this);
         }
 
@@ -479,18 +558,18 @@ public class KaraokeActivity extends Activity {
             artistP = Ui.text(Ui.medium, 32 * k, 0xB3FFFFFF);
             hintP = Ui.text(Ui.medium, 24 * k, 0x8CFFFFFF);
             hintP.setTextAlign(Paint.Align.RIGHT);
-            bigP = Ui.text(Ui.displaySemibold, 84 * k, 0xFFFFFFFF);
-            bigP.setTextAlign(Paint.Align.CENTER);
-            smallP = Ui.text(Ui.displayMedium, 52 * k, 0xFFFFFFFF);
-            smallP.setTextAlign(Paint.Align.CENTER);
-            nextP = Ui.text(Ui.displayMedium, 52 * k, 0xFFFFFFFF);
-            nextP.setTextAlign(Paint.Align.CENTER);
+            sourceP = Ui.text(Ui.medium, 22 * k, 0x66FFFFFF);
+            sourceP.setTextAlign(Paint.Align.RIGHT);
+            lineP = Ui.text(Ui.displaySemibold, 80 * k, 0xFFFFFFFF);
+            lineP.setTextAlign(Paint.Align.CENTER);
             stateP = Ui.text(Ui.displaySemibold, 60 * k, 0xFFFFFFFF);
             stateP.setTextAlign(Paint.Align.CENTER);
             cmdP = Ui.text(Ui.medium, 28 * k, 0xCCFFFFFF);
             cmdP.setTextAlign(Paint.Align.CENTER);
             pillP = Ui.text(Ui.displaySemibold, 30 * k, 0xFF111111);
             pillP.setTextAlign(Paint.Align.CENTER);
+            rowTitleP = Ui.text(Ui.semibold, 38 * k, 0xFFFFFFFF);
+            rowSubP = Ui.text(Ui.medium, 29 * k, 0xB3FFFFFF);
             spin.setStyle(Paint.Style.STROKE);
             spin.setStrokeWidth(5 * k);
             spin.setStrokeCap(Paint.Cap.ROUND);
@@ -498,30 +577,27 @@ public class KaraokeActivity extends Activity {
             veil.setShader(new LinearGradient(0, 0, 0, h, new int[] {0x8C000000, 0x59000000, 0x99000000}, null, Shader.TileMode.CLAMP));
             makeBlobs();
             artShader = null;
-            shownIndex = -2;
         }
 
-        void setSong(String t, String a, Bitmap cover) {
+        void setSong(Bitmap cover) {
             art = cover;
             artShader = null;
             tiny = cover == null ? null : Bitmap.createScaledBitmap(cover, 24, 24, true);
             makeBlobs();
             songAt = SystemClock.uptimeMillis();
-            shownIndex = -2;
+            scroll = -1;
             invalidate();
         }
 
         void lyricsChanged() {
-            shownIndex = -2;
+            scroll = -1;
             invalidate();
         }
 
-        /** Three colors from the art (left, middle, right), a little brighter and more saturated; violet and pink without it. */
+        /** Three colors from the art (left, middle, right), brighter and more saturated; violet and pink without it. */
         private void makeBlobs() {
             int[] colors = {0xFF6A11CB, 0xFFFC2576, 0xFF2575FC};
-            if (tiny != null) {
-                for (int i = 0; i < 3; i++) colors[i] = vivid(average(tiny, i * 8, (i + 1) * 8));
-            }
+            if (tiny != null) for (int i = 0; i < 3; i++) colors[i] = vivid(average(tiny, i * 8, (i + 1) * 8));
             float r = 760 * k;
             for (int i = 0; i < 3; i++) {
                 blobs[i] = new RadialGradient(0, 0, r, Ui.alpha(colors[i], 0.75f), Ui.alpha(colors[i], 0f), Shader.TileMode.CLAMP);
@@ -546,16 +622,22 @@ public class KaraokeActivity extends Activity {
         }
 
         @Override protected void onDraw(Canvas c) {
-            float t = (SystemClock.uptimeMillis() - start) / 1000f;
+            long now = SystemClock.uptimeMillis();
+            float dt = Math.min(0.1f, (now - lastFrame) / 1000f);
+            lastFrame = now;
+            float t = (now - start) / 1000f;
             drawBackground(c, t);
             drawHeader(c);
+            if (results != null) {
+                drawResults(c, t, dt);
+                return;
+            }
             switch (state) {
                 case NO_ACCESS: drawNoAccess(c); break;
                 case WAITING:
                     drawState(c, Ui.tr("▲ Busque uma música", "▲ Search a song", "▲ Buscá una canción"),
-                            Ui.tr("ou ▼ escolha no Spotify: a letra aparece aqui, sincronizada.",
-                                    "or ▼ pick it in Spotify: the lyrics show up here, in sync.",
-                                    "o ▼ elegila en Spotify: la letra aparece acá, sincronizada."));
+                            Ui.tr("Ela toca aqui mesmo, com a letra sincronizada.", "It plays right here, with the lyrics in sync.",
+                                    "Suena acá mismo, con la letra sincronizada."));
                     break;
                 case LOADING:
                     drawState(c, Ui.tr("Procurando a letra…", "Looking for the lyrics…", "Buscando la letra…"), null);
@@ -563,13 +645,15 @@ public class KaraokeActivity extends Activity {
                     break;
                 case NO_LYRICS:
                     drawState(c, Ui.tr("Não achei a letra desta música", "No lyrics found for this song", "No encontré la letra de esta canción"),
-                            Ui.tr("Passe para a próxima com ⏩", "Skip to the next one with ⏩", "Pasá a la siguiente con ⏩"));
+                            Ui.tr("Procurei no LRCLIB, NetEase e lyrics.ovh · ⏩ próxima", "Searched LRCLIB, NetEase and lyrics.ovh · ⏩ next",
+                                    "Busqué en LRCLIB, NetEase y lyrics.ovh · ⏩ siguiente"));
                     break;
                 case INSTRUMENTAL:
                     drawState(c, "♪  Instrumental  ♪", null);
                     break;
                 default:
-                    if (lyrics != null && !lyrics.synced.isEmpty()) drawSynced(c); else drawPlain(c);
+                    if (lyrics != null && !lyrics.synced.isEmpty()) drawSynced(c, dt); else drawPlain(c, dt);
+                    if (lyrics != null) c.drawText(Ui.tr("Letra: ", "Lyrics: ", "Letra: ") + lyrics.source, w - 80 * k, h - 50 * k, sourceP);
             }
             drawOffset(c);
         }
@@ -612,13 +696,15 @@ public class KaraokeActivity extends Activity {
             }
             float tx = song && art != null ? x + s + 32 * k : x;
             if (song) {
-                c.drawText(ellipsize(title, titleP, 1050 * k), tx, y + 58 * k, titleP);
-                c.drawText(ellipsize(artist, artistP, 1050 * k), tx, y + 106 * k, artistP);
+                c.drawText(ellipsize(title, titleP, 1000 * k), tx, y + 58 * k, titleP);
+                c.drawText(ellipsize(artist, artistP, 1000 * k), tx, y + 106 * k, artistP);
             }
-            c.drawText(Ui.tr("▲ buscar · ▼ escolher no Spotify · OK pausa", "▲ search · ▼ pick in Spotify · OK pause",
-                    "▲ buscar · ▼ elegir en Spotify · OK pausa"), w - 80 * k, y + 40 * k, hintP);
-            c.drawText(Ui.tr("◀ ▶ ajustar letra · ⏪ ⏩ música", "◀ ▶ adjust lyrics · ⏪ ⏩ song",
-                    "◀ ▶ ajustar letra · ⏪ ⏩ tema"), w - 80 * k, y + 78 * k, hintP);
+            c.drawText(results != null ? Ui.tr("▲ ▼ escolher · OK tocar · Voltar fechar", "▲ ▼ choose · OK play · Back close",
+                    "▲ ▼ elegir · OK reproducir · Atrás cerrar")
+                    : Ui.tr("▲ buscar · OK pausa · ⏪ ⏩ música", "▲ search · OK pause · ⏪ ⏩ song", "▲ buscar · OK pausa · ⏪ ⏩ tema"),
+                    w - 80 * k, y + 40 * k, hintP);
+            if (results == null) c.drawText(Ui.tr("◀ ▶ ajustar letra · ▼ Spotify", "◀ ▶ adjust lyrics · ▼ Spotify",
+                    "◀ ▶ ajustar letra · ▼ Spotify"), w - 80 * k, y + 78 * k, hintP);
         }
 
         private void drawState(Canvas c, String line, String sub) {
@@ -636,111 +722,129 @@ public class KaraokeActivity extends Activity {
                     w / 2, h * 0.42f + 200 * k, cmdP);
         }
 
-        private void drawSynced(Canvas c) {
+        // MARK: Lyrics
+
+        private static final float GAP = 118;   // between lines, at 1920 px wide
+
+        /**
+         * Synced lyrics as a list that glides: every line has its place and the list scrolls smoothly to the one being
+         * sung (no jumps). Lines grow and light up as they reach the middle; the current one fills with white as it goes.
+         */
+        private void drawSynced(Canvas c, float dt) {
             List<Lyrics.Line> lines = lyrics.synced;
             long pos = position();
             int idx = -1;
             for (int i = 0; i < lines.size(); i++) { if (lines.get(i).at <= pos) idx = i; else break; }
-            long now = SystemClock.uptimeMillis();
-            if (idx != shownIndex) {
-                if (shownIndex != -2) scrollAt = now;
-                shownIndex = idx;
-                layoutCurrent(idx >= 0 ? lines.get(idx).text : "");
-            }
-            float e = 1 - Ui.clamp((now - scrollAt) / 380f);
-            float shift = e * e * 150 * k;            // eases up into place
-            float cy = h * 0.55f + shift;
-            // Previous line, dim, above.
-            if (idx >= 1) {
-                smallP.setAlpha(Math.round(255 * 0.32f));
-                c.drawText(ellipsize(orNote(lines.get(idx - 1).text), smallP, 1700 * k), w / 2, cy - 190 * k, smallP);
-            }
-            // The line being sung: dim, then filled with white as it goes.
+            float target = Math.max(0, idx);
+            if (scroll < 0) scroll = target;
+            // Critically damped glide: quick to start, soft to land.
+            scroll += (target - scroll) * (1 - (float) Math.exp(-dt * 5.5f));
             long at = idx >= 0 ? lines.get(idx).at : 0;
             long next = idx + 1 < lines.size() ? lines.get(idx + 1).at : at + 5000;
             float p = idx < 0 ? 0 : Ui.clamp((pos - at) / (float) Math.max(400, next - at));
-            drawFilling(c, cy, p, 1 - e);
-            // Next two lines, below.
-            float ny = cy + (wrapped.size() > 1 ? 120 * k : 0) + 150 * k;
-            for (int j = 1; j <= 2 && idx + j < lines.size(); j++) {
-                nextP.setAlpha(Math.round(255 * (j == 1 ? 0.62f : 0.3f)));
-                c.drawText(ellipsize(orNote(lines.get(idx + j).text), nextP, 1700 * k), w / 2, ny + (j - 1) * 92 * k, nextP);
+            float cy = h * 0.56f;
+            int from = Math.max(0, (int) Math.floor(scroll) - 3), to = Math.min(lines.size() - 1, (int) Math.ceil(scroll) + 4);
+            for (int i = from; i <= to; i++) {
+                float d = i - scroll, dist = Math.abs(d);
+                if (dist > 4.2f) continue;
+                float near = Ui.clamp(1 - dist);                      // 1 in the middle, 0 a line away
+                float scale = 0.66f + 0.34f * near;
+                float alpha = dist <= 1 ? 0.42f + 0.58f * near : Math.max(0, 0.42f - (dist - 1) * 0.13f);
+                if (d < 0) alpha *= 0.75f;                            // sung lines fade a little more
+                float y = cy + d * GAP * k * (d > 0 ? 1.0f : 1.1f);
+                drawLine(c, orNote(lines.get(i).text), y, scale, alpha, i == idx ? p : i < idx ? 1 : 0, i == idx);
             }
         }
 
-        private void drawFilling(Canvas c, float cy, float p, float appear) {
-            if (wrapped.isEmpty()) return;
-            bigP.setTextSize(bigSize);
-            float total = 0;
-            for (String s : wrapped) total += bigP.measureText(s);
-            float done = p * total, lineH = bigSize * 1.3f;
-            float top = cy - (wrapped.size() - 1) * lineH / 2;
-            for (int i = 0; i < wrapped.size(); i++) {
-                String s = wrapped.get(i);
-                float lw = bigP.measureText(s), y = top + i * lineH, left = w / 2 - lw / 2;
-                bigP.setAlpha(Math.round(255 * 0.38f * (0.4f + 0.6f * appear)));
-                c.drawText(s, w / 2, y, bigP);
-                float f = Math.max(0, Math.min(lw, done));
-                if (f > 0) {
-                    c.save();
-                    c.clipRect(left, y - bigSize, left + f, y + bigSize * 0.4f);
-                    bigP.setAlpha(255);
-                    c.drawText(s, w / 2, y, bigP);
-                    c.restore();
-                }
-                done -= lw;
+        /** One line, shrunk to fit; `filled` (0..1) of it in full white over a dimmer copy. */
+        private void drawLine(Canvas c, String s, float y, float scale, float alpha, float filled, boolean current) {
+            float size = 80 * k * scale;
+            lineP.setTextSize(size);
+            float tw = lineP.measureText(s), max = 1720 * k;
+            if (tw > max) { size *= max / tw; lineP.setTextSize(size); tw = max; }
+            float base = y + size * 0.35f;
+            if (!current) {
+                lineP.setAlpha(Math.round(255 * alpha * (filled >= 1 ? 0.85f : 1)));
+                c.drawText(s, w / 2, base, lineP);
+                return;
+            }
+            float left = w / 2 - tw / 2;
+            lineP.setAlpha(Math.round(255 * 0.4f * alpha));
+            c.drawText(s, w / 2, base, lineP);
+            if (filled > 0) {
+                c.save();
+                c.clipRect(left, base - size * 1.2f, left + tw * filled, base + size * 0.5f);
+                lineP.setAlpha(Math.round(255 * alpha));
+                c.drawText(s, w / 2, base, lineP);
+                c.restore();
             }
         }
 
-        /** Up to two lines that fit the width; the type shrinks a little for long lines. */
-        private void layoutCurrent(String text) {
-            wrapped.clear();
-            String s = orNote(text);
-            float max = 1680 * k;
-            for (float size = 84; size >= 56; size -= 4) {
-                bigSize = size * k;
-                bigP.setTextSize(bigSize);
-                List<String> out = wrap(s, bigP, max);
-                if (out.size() <= 2 || size <= 56) {
-                    wrapped.addAll(out.size() > 2 ? out.subList(0, 2) : out);
-                    return;
-                }
-            }
-        }
-
-        private List<String> wrap(String s, Paint p, float max) {
-            List<String> out = new ArrayList<>();
-            StringBuilder line = new StringBuilder();
-            for (String word : s.split(" ")) {
-                String trial = line.length() == 0 ? word : line + " " + word;
-                if (p.measureText(trial) > max && line.length() > 0) {
-                    out.add(line.toString());
-                    line = new StringBuilder(word);
-                } else {
-                    line = new StringBuilder(trial);
-                }
-            }
-            if (line.length() > 0) out.add(line.toString());
-            return out;
-        }
-
-        /** Not synced: the plain lyrics, the window moving with the song's progress. */
-        private void drawPlain(Canvas c) {
+        /** Not synced: the plain lyrics, gliding with the song's progress. */
+        private void drawPlain(Canvas c, float dt) {
             List<String> lines = lyrics.plain;
-            PlaybackState s = controller == null ? null : controller.getPlaybackState();
             MediaMetadata md = controller == null ? null : controller.getMetadata();
             long duration = md == null ? 0 : md.getLong(MediaMetadata.METADATA_KEY_DURATION);
-            float p = s == null || duration <= 0 ? 0 : Ui.clamp(position() / (float) duration);
-            int center = Math.min(lines.size() - 1, (int) (p * lines.size()));
-            c.drawText(Ui.tr("Letra sem sincronizar", "Lyrics not synced", "Letra sin sincronizar"), w / 2, h * 0.28f, cmdP);
-            for (int j = -2; j <= 3; j++) {
-                int i = center + j;
-                if (i < 0 || i >= lines.size()) continue;
-                Paint pt = j == 0 ? stateP : smallP;
-                pt.setAlpha(Math.round(255 * (j == 0 ? 1f : j == -1 || j == 1 ? 0.55f : 0.28f)));
-                c.drawText(ellipsize(lines.get(i), pt, 1700 * k), w / 2, h * 0.55f + j * 96 * k, pt);
+            float target = duration <= 0 ? 0 : Ui.clamp(position() / (float) duration) * Math.max(0, lines.size() - 1);
+            if (scroll < 0) scroll = target;
+            scroll += (target - scroll) * (1 - (float) Math.exp(-dt * 3f));
+            c.drawText(Ui.tr("Letra sem sincronizar", "Lyrics not synced", "Letra sin sincronizar"), w / 2, h * 0.26f, cmdP);
+            for (int i = Math.max(0, (int) scroll - 3); i < lines.size() && i <= scroll + 4; i++) {
+                float d = i - scroll, dist = Math.abs(d), near = Ui.clamp(1 - dist);
+                float alpha = dist <= 1 ? 0.42f + 0.58f * near : Math.max(0, 0.42f - (dist - 1) * 0.13f);
+                drawLine(c, lines.get(i), h * 0.56f + d * GAP * k, 0.66f + 0.2f * near, alpha, 0, false);
             }
-            stateP.setAlpha(255);
+        }
+
+        // MARK: The song list
+
+        private void drawResults(Canvas c, float t, float dt) {
+            float x = 440 * k, right = w - 440 * k, top = 250 * k, rowH = 112 * k;
+            cmdP.setTextAlign(Paint.Align.LEFT);
+            c.drawText("“" + query + "”", x, top - 34 * k, cmdP);
+            cmdP.setTextAlign(Paint.Align.CENTER);
+            if (searching) {
+                Ui.spinner(c, w / 2, h * 0.55f, 26 * k, t, spin);
+                return;
+            }
+            if (results.isEmpty()) {
+                drawState(c, searchError != null ? Ui.tr("Não deu para buscar no Spotify", "Couldn't search Spotify", "No se pudo buscar en Spotify")
+                        : Ui.tr("Nada encontrado", "Nothing found", "No encontré nada"), searchError);
+                return;
+            }
+            int visible = 6;
+            float targetScroll = Math.max(0, Math.min(results.size() - visible, resultIndex - 2));
+            listScroll += (targetScroll - listScroll) * (1 - (float) Math.exp(-dt * 10f));
+            c.save();
+            c.clipRect(0, top - 10 * k, w, top + visible * rowH + 10 * k);
+            for (int i = 0; i < results.size(); i++) {
+                float y = top + (i - listScroll) * rowH;
+                if (y < top - rowH || y > top + visible * rowH) continue;
+                SpotifyCatalog.Track tr = results.get(i);
+                boolean focus = i == resultIndex;
+                rect.set(x, y, right, y + rowH - 12 * k);
+                if (focus) {
+                    fill.setColor(0xF2FFFFFF);
+                    c.drawRoundRect(rect, 24 * k, 24 * k, fill);
+                } else {
+                    fill.setColor(0x24FFFFFF);
+                    c.drawRoundRect(rect, 24 * k, 24 * k, fill);
+                }
+                float ts = rowH - 32 * k, tx = x + 10 * k, ty = y + 10 * k;
+                Bitmap thumb = thumbs.get(tr.image);
+                if (thumb != null) {
+                    rect.set(tx, ty, tx + ts, ty + ts);
+                    c.drawBitmap(thumb, null, rect, thumbPaint);
+                }
+                float textX = tx + ts + 26 * k;
+                rowTitleP.setColor(focus ? 0xFF111111 : 0xFFFFFFFF);
+                rowSubP.setColor(focus ? 0x99111111 : 0xB3FFFFFF);
+                c.drawText(ellipsize(tr.name, rowTitleP, right - textX - 30 * k), textX, y + 46 * k, rowTitleP);
+                long sec = tr.durationMs / 1000;
+                String sub = tr.artists + "  ·  " + sec / 60 + ":" + (sec % 60 < 10 ? "0" : "") + sec % 60;
+                c.drawText(ellipsize(sub, rowSubP, right - textX - 30 * k), textX, y + 86 * k, rowSubP);
+            }
+            c.restore();
         }
 
         private void drawOffset(Canvas c) {
