@@ -70,10 +70,12 @@ sound's spectrum, through Android's Visualizer), once: `adb shell pm grant io.fr
 
 At the top, the weather (now, high and low, the next six hours) over photos of beautiful places around the world
 (Bing's photos of the day, no key needed), a new one every 5 minutes with the place in the corner. Below, a smaller row
-with the latest videos of the YouTube channels you follow (newest first, no Shorts); OK opens one in YouTube. Then the
+with videos for you (the new ones from the channels whose videos you liked, plus what's popular in your country in
+the categories you like most; no Shorts); OK opens one in YouTube. Then the
 shelf and the drawer. ↑ from the shelf goes to the videos, ↑ again to the corner buttons.
 
-YouTube offers no way to read an account's recommendations, so the row is your subscriptions. Once:
+YouTube offers no way to read an account's recommendations or history, so the row is built from your likes (and your
+most relevant subscriptions when there are few). Once:
 
 1. console.cloud.google.com → a new project → APIs & Services → Library → **YouTube Data API v3** → Enable.
 2. OAuth consent screen: External, any name, your email; then **Publish app** (in testing, Google signs you out

@@ -3155,8 +3155,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float x = MARGIN * k, top = V_TOP * k;
         int state = youtube.state;
         if (state == YouTube.LOGIN) {
-            c.drawText(Ui.tr("Conecte o YouTube para ver suas inscrições", "Connect YouTube to see your subscriptions",
-                    "Conectá YouTube para ver tus suscripciones"), x, top + 20 * k, wCond);
+            c.drawText(Ui.tr("Conecte o YouTube para ver os vídeos para você", "Connect YouTube to see videos for you",
+                    "Conectá YouTube para ver videos para vos"), x, top + 20 * k, wCond);
             c.drawText(Ui.tr("No celular, entre em ", "On your phone, go to ", "En el celu entrá a ") + youtube.verifyUrl
                     + Ui.tr(" e digite:", " and enter:", " y poné:"), x, top + 74 * k, wSmall);
             c.drawText(youtube.userCode, x, top + 170 * k, wCode);
@@ -3166,7 +3166,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             if (state == YouTube.ERROR) c.drawText("YouTube: " + youtube.error, x, top + 20 * k, wSmall);
             return;
         }
-        c.drawText(Ui.tr("YouTube · Suas inscrições", "YouTube · Your subscriptions", "YouTube · Tus suscripciones"),
+        c.drawText(Ui.tr("YouTube · Para você", "YouTube · For you", "YouTube · Para vos"),
                 x, top - 22 * k, wHeader);
         float cw = V_W * k, ch = V_H * k, step = (V_W + V_GAP) * k, r0 = 14 * k, sc = videoScroll.value;
         int focusedOne = -1;

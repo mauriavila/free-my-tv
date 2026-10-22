@@ -34,13 +34,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
- * The home screen's YouTube row: the latest videos from the channels the person is subscribed to (YouTube offers no
- * way to read an account's recommendations). Signed in once on the TV with Google's TV sign-in (a code entered at
+ * The home screen's YouTube row, "for you" as far as YouTube allows (it offers no way to read an account's
+ * recommendations or history): the new videos of the channels whose videos you liked most (your subscriptions YouTube
+ * ranks highest fill in when there are few likes), plus what's popular in your country in the categories you like
+ * most, without the videos you already liked. Signed in once on the TV with Google's TV sign-in (a code entered at
  * google.com/device on a phone), with the person's own OAuth client, kept only on the TV:
  * adb push youtube_key.txt /sdcard/Android/data/io.freemytv/files/youtube_key.txt  (one line: CLIENT_ID:CLIENT_SECRET)
- * The token stays in the app's private files. YouTube Data API, read-only: subscriptions (by relevance, the channels
- * watched most first), each one's latest uploads, then their lengths to leave Shorts out. ~32 of the 10,000 daily
- * quota units per refresh, every 30 minutes.
+ * The token stays in the app's private files. YouTube Data API, read-only: ~25 of the 10,000 daily quota units per
+ * refresh, every 30 minutes.
  */
 final class YouTube {
     static final int NO_KEY = 0, LOGIN = 1, READY = 2, ERROR = 3;
@@ -61,7 +62,7 @@ final class YouTube {
     private static final String SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
     private static final String API = "https://www.googleapis.com/youtube/v3/";
     private static final long FEED_MS = 30 * 60_000L;
-    private static final int CHANNELS = 30, VIDEOS = 20;
+    private static final int VIDEOS = 20;
 
     private static YouTube instance;
 
@@ -190,16 +191,37 @@ final class YouTube {
 
     private void loadFeed(String[] key) throws Exception {
         String token = access(key);
-        JSONArray subs = get(API + "subscriptions?part=snippet&mine=true&order=relevance&maxResults=50", token).optJSONArray("items");
-        List<String> channels = new ArrayList<>();
-        for (int i = 0; subs != null && i < subs.length() && channels.size() < CHANNELS; i++) {
-            String id = subs.getJSONObject(i).getJSONObject("snippet").getJSONObject("resourceId").optString("channelId");
-            if (id.startsWith("UC")) channels.add(id);
+        // What you like: the channels and categories of your latest 👍 (the most liked first, then the most recent).
+        java.util.Map<String, Integer> channelLikes = new java.util.LinkedHashMap<>(), categoryLikes = new java.util.HashMap<>();
+        java.util.Set<String> liked = new java.util.HashSet<>();
+        try {
+            JSONArray likes = get(API + "videos?part=snippet&myRating=like&maxResults=50", token).optJSONArray("items");
+            for (int i = 0; likes != null && i < likes.length(); i++) {
+                JSONObject v = likes.getJSONObject(i), sn = v.getJSONObject("snippet");
+                liked.add(v.optString("id"));
+                String ch = sn.optString("channelId"), cat = sn.optString("categoryId");
+                if (!ch.isEmpty()) channelLikes.put(ch, channelLikes.containsKey(ch) ? channelLikes.get(ch) + 1 : 1);
+                if (!cat.isEmpty()) categoryLikes.put(cat, categoryLikes.containsKey(cat) ? categoryLikes.get(cat) + 1 : 1);
+            }
+        } catch (Exception e) {
+            AppLog.w("youtube likes: " + e.getMessage());
+        }
+        List<String> channels = new ArrayList<>(channelLikes.keySet());
+        final java.util.Map<String, Integer> counts = channelLikes;
+        Collections.sort(channels, (a, b) -> counts.get(b) - counts.get(a));   // stable: ties stay most recent first
+        if (channels.size() > 20) channels = new ArrayList<>(channels.subList(0, 20));
+        if (channels.size() < 12) {   // few likes: the subscriptions YouTube ranks as most relevant fill in
+            JSONArray subs = get(API + "subscriptions?part=snippet&mine=true&order=relevance&maxResults=50", token).optJSONArray("items");
+            for (int i = 0; subs != null && i < subs.length() && channels.size() < 16; i++) {
+                String id = subs.getJSONObject(i).getJSONObject("snippet").getJSONObject("resourceId").optString("channelId");
+                if (id.startsWith("UC") && !channels.contains(id)) channels.add(id);
+            }
         }
         List<Video> found = new ArrayList<>();
         List<String> thumbs = new ArrayList<>();
-        long since = System.currentTimeMillis() - 21 * 86_400_000L;
+        long since = System.currentTimeMillis() - 30 * 86_400_000L;
         for (String ch : channels) {
+            if (!ch.startsWith("UC")) continue;
             JSONArray items;
             try {
                 items = get(API + "playlistItems?part=snippet,contentDetails&maxResults=3&playlistId=UU" + ch.substring(2), token).optJSONArray("items");
@@ -207,26 +229,45 @@ final class YouTube {
                 continue;   // a channel without uploads
             }
             for (int i = 0; items != null && i < items.length(); i++) {
-                JSONObject o = items.getJSONObject(i), s = o.getJSONObject("snippet");
+                JSONObject o = items.getJSONObject(i), sn = o.getJSONObject("snippet");
                 String vid = o.getJSONObject("contentDetails").optString("videoId");
-                long at = time(o.getJSONObject("contentDetails").optString("videoPublishedAt", s.optString("publishedAt")));
-                if (vid.isEmpty() || at < since) continue;
-                String channelName = s.optString("videoOwnerChannelTitle", s.optString("channelTitle"));
-                found.add(new Video(vid, s.optString("title"), channelName, at));
-                JSONObject th = s.optJSONObject("thumbnails");
-                JSONObject medium = th == null ? null : th.optJSONObject("medium");
-                thumbs.add(medium == null ? "https://i.ytimg.com/vi/" + vid + "/mqdefault.jpg" : medium.optString("url"));
+                long at = time(o.getJSONObject("contentDetails").optString("videoPublishedAt", sn.optString("publishedAt")));
+                if (vid.isEmpty() || at < since || liked.contains(vid)) continue;
+                found.add(new Video(vid, sn.optString("title"), sn.optString("videoOwnerChannelTitle", sn.optString("channelTitle")), at));
+                thumbs.add(thumb(sn, vid));
             }
         }
-        // Newest first; Shorts (a minute or less), lives and premieres out.
-        List<Integer> order = new ArrayList<>();
-        for (int i = 0; i < found.size(); i++) order.add(i);
-        Collections.sort(order, (a, b) -> Long.compare(found.get(b).published, found.get(a).published));
-        List<Integer> top = new ArrayList<>(order.subList(0, Math.min(45, order.size())));
-        StringBuilder ids = new StringBuilder();
-        for (int i : top) ids.append(ids.length() == 0 ? "" : ",").append(found.get(i).id);
+        Collections.sort(found, (a, b) -> Long.compare(b.published, a.published));
+        // Popular today in your country, in the two categories you like most.
+        List<String> categories = new ArrayList<>(categoryLikes.keySet());
+        final java.util.Map<String, Integer> catCounts = categoryLikes;
+        Collections.sort(categories, (a, b) -> catCounts.get(b) - catCounts.get(a));
+        String region = Config.TMDB_REGION.trim().isEmpty() ? "AR" : Config.TMDB_REGION.trim().toUpperCase(Locale.ROOT);
+        List<Video> popular = new ArrayList<>();
+        java.util.Map<String, String> thumbOf = new java.util.HashMap<>();
+        for (int i = 0; i < found.size(); i++) thumbOf.put(found.get(i).id, thumbs.get(i));
+        for (String cat : categories.subList(0, Math.min(2, categories.size()))) {
+            try {
+                JSONArray items = get(API + "videos?part=snippet&chart=mostPopular&maxResults=8&regionCode=" + region
+                        + "&videoCategoryId=" + cat, token).optJSONArray("items");
+                for (int i = 0; items != null && i < items.length(); i++) {
+                    JSONObject v = items.getJSONObject(i), sn = v.getJSONObject("snippet");
+                    String vid = v.optString("id");
+                    if (liked.contains(vid) || thumbOf.containsKey(vid)) continue;
+                    popular.add(new Video(vid, sn.optString("title"), sn.optString("channelTitle"), time(sn.optString("publishedAt"))));
+                    thumbOf.put(vid, thumb(sn, vid));
+                }
+            } catch (Exception e) {
+                AppLog.w("youtube popular " + cat + ": " + e.getMessage());   // some categories have no chart
+            }
+        }
+        // Lengths, to leave Shorts (a minute or less), lives and premieres out.
+        List<Video> candidates = new ArrayList<>(found.subList(0, Math.min(34, found.size())));
+        candidates.addAll(popular.subList(0, Math.min(16, popular.size())));
         java.util.Set<String> keep = new java.util.HashSet<>();
-        if (ids.length() > 0) {
+        for (int from = 0; from < candidates.size(); from += 50) {
+            StringBuilder ids = new StringBuilder();
+            for (int i = from; i < Math.min(candidates.size(), from + 50); i++) ids.append(ids.length() == 0 ? "" : ",").append(candidates.get(i).id);
             JSONArray details = get(API + "videos?part=contentDetails,snippet&id=" + ids, token).optJSONArray("items");
             for (int i = 0; details != null && i < details.length(); i++) {
                 JSONObject v = details.getJSONObject(i);
@@ -235,28 +276,33 @@ final class YouTube {
                 keep.add(v.optString("id"));
             }
         }
+        // Your channels' new videos, with one popular video every third place.
+        List<Video> mine = new ArrayList<>(), hot = new ArrayList<>();
+        for (Video v : found) if (keep.contains(v.id)) mine.add(v);
+        for (Video v : popular) if (keep.contains(v.id)) hot.add(v);
         List<Video> out = new ArrayList<>();
-        List<String> outThumbs = new ArrayList<>();
-        for (int i : top) {
-            if (!keep.contains(found.get(i).id)) continue;
-            out.add(found.get(i));
-            outThumbs.add(thumbs.get(i));
-            if (out.size() == VIDEOS) break;
+        int a = 0, b = 0;
+        while (out.size() < VIDEOS && (a < mine.size() || b < hot.size())) {
+            boolean takeHot = b < hot.size() && (a >= mine.size() || out.size() % 3 == 2);
+            out.add(takeHot ? hot.get(b++) : mine.get(a++));
         }
-        // Thumbnails we already have carry over; the rest are fetched (320 × 180).
-        for (int i = 0; i < out.size(); i++) {
-            for (Video old : videos) if (old.id.equals(out.get(i).id)) out.get(i).image = old.image;
-        }
+        for (Video v : out) for (Video old : videos) if (old.id.equals(v.id)) v.image = old.image;
         videos = out;
         state = READY;
         error = "";
         changed();
-        AppLog.w("youtube: " + out.size() + " videos from " + channels.size() + " channels");
+        AppLog.w("youtube: " + out.size() + " videos (" + channels.size() + " channels, " + liked.size() + " likes)");
         for (int i = 0; i < out.size(); i++) {
             if (out.get(i).image != null) continue;
-            out.get(i).image = image(outThumbs.get(i));
+            out.get(i).image = image(thumbOf.get(out.get(i).id));
             if (i % 4 == 3 || i == out.size() - 1) changed();
         }
+    }
+
+    private static String thumb(JSONObject snippet, String id) {
+        JSONObject th = snippet.optJSONObject("thumbnails");
+        JSONObject medium = th == null ? null : th.optJSONObject("medium");
+        return medium == null ? "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg" : medium.optString("url");
     }
 
     /** Opens the video in the TV's YouTube app (Amazon's on Fire TV, Google's elsewhere), or just the app. */
