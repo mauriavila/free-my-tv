@@ -78,6 +78,27 @@ public class KaraokeActivity extends Activity {
     private boolean resumed, returnOnNextSong;
     private String pendingUri;           // a song to play as soon as Spotify's session shows up
     private String album = "";
+
+    // No synced lyrics: after a short countdown Spotify opens (its own lyrics, from Musixmatch), and the karaoke comes
+    // back by itself as soon as a song with synced lyrics starts. OK during the countdown stays.
+    private static final long AUTO_MS = 4000;
+    private long autoAt;            // uptime when Spotify opens; 0 = no countdown
+    private boolean awayForLyrics;  // in Spotify for its lyrics: come back on the next song we have synced
+    private final Runnable autoOpen = this::openForLyrics;
+
+    private void openForLyrics() {
+        autoAt = 0;
+        if (!resumed || syncing || results != null || search.getVisibility() == View.VISIBLE || hasSynced()) return;
+        Intent i = getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY);
+        if (i == null) return;
+        try {
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            awayForLyrics = true;
+            AppLog.w("karaoke: no synced lyrics, over to Spotify's");
+        } catch (RuntimeException e) {
+            AppLog.w("karaoke: couldn't open Spotify: " + e.getMessage());
+        }
+    }
     private long durationMs;
 
     // Sync mode (☰ on songs with lyrics but no times): the song starts over and OK marks when each line begins.
@@ -117,6 +138,7 @@ public class KaraokeActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
+        awayForLyrics = false;
         if (state == NO_ACCESS) { disconnect(); connect(); } else refresh();
         beat.start();
         view.start();
@@ -124,6 +146,7 @@ public class KaraokeActivity extends Activity {
 
     @Override protected void onPause() {
         resumed = false;
+        cancelAuto();
         if (isFinishing()) Lights.partyStop(this);
         beat.stop();
         view.stop();
@@ -263,6 +286,25 @@ public class KaraokeActivity extends Activity {
         lyrics = l;
         state = l == null || !l.any() ? (l != null && l.instrumental ? INSTRUMENTAL : NO_LYRICS) : READY;
         view.lyricsChanged();
+        cancelAuto();
+        if (hasSynced() || state == INSTRUMENTAL) {
+            if (awayForLyrics && !resumed) {
+                awayForLyrics = false;
+                bringToFront(300);
+            }
+        } else if (resumed && !syncing && controller != null) {
+            autoAt = SystemClock.uptimeMillis() + AUTO_MS;
+            main.postDelayed(autoOpen, AUTO_MS);
+        }
+    }
+
+    private boolean hasSynced() {
+        return lyrics != null && !lyrics.synced.isEmpty();
+    }
+
+    private void cancelAuto() {
+        main.removeCallbacks(autoOpen);
+        autoAt = 0;
     }
 
     // MARK: - Sync with the remote
@@ -560,7 +602,10 @@ public class KaraokeActivity extends Activity {
     private void comeBack() {
         if (resumed || !returnOnNextSong) return;
         returnOnNextSong = false;
-        // A moment for Spotify to settle, then back in front.
+        bringToFront(600);   // a moment for Spotify to settle
+    }
+
+    private void bringToFront(long delayMs) {
         main.postDelayed(() -> {
             try {
                 startActivity(new Intent(this, KaraokeActivity.class)
@@ -569,7 +614,7 @@ public class KaraokeActivity extends Activity {
             } catch (RuntimeException e) {
                 AppLog.w("karaoke: couldn't come back: " + e.getMessage());
             }
-        }, 600);
+        }, delayMs);
     }
 
     // MARK: - Remote
@@ -577,6 +622,10 @@ public class KaraokeActivity extends Activity {
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
         int code = e.getKeyCode();
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN, first = down && e.getRepeatCount() == 0;
+        if (autoAt > 0 && down) {   // any key stops the countdown; OK just stays
+            cancelAuto();
+            if (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER) return true;
+        }
         if (search.getVisibility() == View.VISIBLE) {
             if (code == KeyEvent.KEYCODE_BACK) { if (!down) closeSearch(); return true; }
             return super.dispatchKeyEvent(e);
@@ -930,6 +979,12 @@ public class KaraokeActivity extends Activity {
                     if (lyrics != null) c.drawText(Ui.tr("Letra: ", "Lyrics: ", "Letra: ") + lyrics.source, w - 80 * k, h - 50 * k, sourceP);
             }
             drawOffset(c);
+            if (autoAt > 0) {
+                long left = Math.max(1, (autoAt - now + 999) / 1000);
+                c.drawText(Ui.tr("Sem letra sincronizada: abro o Spotify em ", "No synced lyrics: opening Spotify in ",
+                        "Sin letra sincronizada: abro Spotify en ") + left + Ui.tr(" · OK fico aqui", " · OK stays here", " · OK me quedo"),
+                        w / 2, h - 120 * k, cmdP);
+            }
         }
 
         private void drawBackground(Canvas c, float t, float dt) {

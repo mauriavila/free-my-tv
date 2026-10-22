@@ -59,6 +59,9 @@ press OK as each line starts (◀ undoes the last one, ▶ finishes early, Back 
 song is synced from then on, and published to LRCLIB (its small proof of work runs in the background), so every app
 using LRCLIB gets them too.
 
+With no synced lyrics at all, after a 4 s countdown (OK stays) Spotify opens, to sing with its own lyrics, and the
+karaoke comes back by itself as soon as a song with synced lyrics starts.
+
 The background is a club: out-of-focus colored lights, moving heads from the ceiling, a laser fan, a disco ball's
 dots and sparkles; the lyrics light up like neon tubes as they're sung. It moves on its own; to make them swell on the beat (BeatPulse reads only the
 sound's spectrum, through Android's Visualizer), once: `adb shell pm grant io.freemytv android.permission.RECORD_AUDIO`.
