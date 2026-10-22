@@ -139,6 +139,7 @@ public class KaraokeActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
+        AppLog.w("karaoke: in front");
         awayForLyrics = false;
         if (state == NO_ACCESS) { disconnect(); connect(); } else refresh();
         beat.start();
@@ -159,6 +160,8 @@ public class KaraokeActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        AppLog.w("karaoke: closed");
+        main.removeCallbacksAndMessages(null);   // nothing left to run on a closed screen
         Lights.partyStop(this);
         if (browser != null) browser.disconnect();
         disconnect();
@@ -262,7 +265,7 @@ public class KaraokeActivity extends Activity {
         if (!same || (art != null && art != view.art)) view.setSong(art);
         if (art == null) {
             final String uri = text(m, MediaMetadata.METADATA_KEY_ALBUM_ART_URI, MediaMetadata.METADATA_KEY_ART_URI);
-            if (uri.startsWith("http")) io.execute(() -> {
+            if (uri.startsWith("http")) run(() -> {
                 Bitmap b = download(uri, 2);
                 if (b != null) main.post(() -> { if (key.equals(trackKey)) view.setSong(b); });
             });
@@ -288,7 +291,7 @@ public class KaraokeActivity extends Activity {
      */
     private void findLyrics(final String key, final String a, final String t, final String album, final long duration,
                             final boolean retry) {
-        io.execute(() -> {
+        run(() -> {
             final Lyrics l = Lyrics.find(getFilesDir(), a, t, album, duration);
             final boolean good = l != null && (l.instrumental || !l.synced.isEmpty());
             AppLog.w("lyrics: " + t + " → " + (l == null ? "none" : l.source + (l.synced.isEmpty() ? " (no times)" : " (synced)")));
@@ -362,7 +365,7 @@ public class KaraokeActivity extends Activity {
         final long d = durationMs;
         CACHE.put(key, l);
         show(l);
-        io.execute(() -> {
+        run(() -> {
             try {
                 Lyrics.saveLocal(getFilesDir(), a, t, lines);
             } catch (Exception e) {
@@ -379,6 +382,15 @@ public class KaraokeActivity extends Activity {
                     : Ui.tr("Não deu para enviar ao LRCLIB (fica salva nesta TV)", "Couldn't send it to LRCLIB (it stays on this TV)",
                     "No se pudo subir a LRCLIB (queda guardada en esta tele)")));
         });
+    }
+
+    /** Background work, unless the screen is already closed (its executor is shut down then). */
+    private void run(Runnable job) {
+        if (io.isShutdown()) return;
+        try {
+            io.execute(job);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+        }
     }
 
     private void toast(String text) {
@@ -484,7 +496,7 @@ public class KaraokeActivity extends Activity {
         searchError = null;
         final String region = Config.TMDB_REGION.trim().toUpperCase(java.util.Locale.ROOT);
         final String market = region.length() == 2 ? region : "US";
-        io.execute(() -> {
+        run(() -> {
             List<SpotifyCatalog.Track> found = null;
             String error = null;
             try {
@@ -509,7 +521,7 @@ public class KaraokeActivity extends Activity {
         for (final SpotifyCatalog.Track t : list) {
             if (t.image.isEmpty() || thumbs.containsKey(t.image)) continue;
             thumbs.put(t.image, null);
-            io.execute(() -> {
+            run(() -> {
                 Bitmap b = download(t.image, 1);
                 if (b != null) main.post(() -> thumbs.put(t.image, b));
             });
@@ -633,14 +645,30 @@ public class KaraokeActivity extends Activity {
     }
 
     private void bringToFront(long delayMs) {
+        bringToFront(delayMs, 3);
+    }
+
+    /**
+     * Back in front: the whole task moved to the front (startActivity from behind isn't always honored), then checked
+     * 1.5 s later and tried again, up to `tries` times.
+     */
+    private void bringToFront(long delayMs, final int tries) {
         main.postDelayed(() -> {
+            if (resumed || isFinishing() || isDestroyed()) return;
+            try {
+                android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+                am.moveTaskToFront(getTaskId(), 0);
+            } catch (RuntimeException e) {
+                AppLog.w("karaoke: moveTaskToFront: " + e.getMessage());
+            }
             try {
                 startActivity(new Intent(this, KaraokeActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
-                AppLog.w("karaoke: back in front");
             } catch (RuntimeException e) {
                 AppLog.w("karaoke: couldn't come back: " + e.getMessage());
             }
+            AppLog.w("karaoke: back to the front (" + tries + ")");
+            if (tries > 1) bringToFront(1500, tries - 1);
         }, delayMs);
     }
 

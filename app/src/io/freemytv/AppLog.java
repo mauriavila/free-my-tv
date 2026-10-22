@@ -42,6 +42,18 @@ final class AppLog {
         }
     }
 
+    /** A crash, written right away (the process is about to end). */
+    static void crash(String trace) {
+        Log.e("FreeMyTV", trace);
+        File f = file;
+        if (f == null) return;
+        try (OutputStream out = new FileOutputStream(f, true)) {
+            out.write((new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.ROOT).format(new Date())
+                    + (process.isEmpty() ? " " : " " + process + " ") + "CRASH " + trace + "\n").getBytes("UTF-8"));
+        } catch (Exception ignored) {
+        }
+    }
+
     static void w(String message) {
         Log.i("FreeMyTV", message);
         final File f = file;
