@@ -26,6 +26,16 @@ import android.view.Choreographer;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.Toast;
+import android.content.Intent;
+import android.net.Uri;
+import android.text.InputType;
+import android.util.TypedValue;
+import android.view.Gravity;
 
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -42,7 +52,9 @@ import java.util.concurrent.Executors;
  * being sung filling up as it goes, over a slowly moving background in the album's colors. The music keeps its
  * original vocals: this is for singing along. Lyrics come from LRCLIB (Lyrics). Seeing what plays needs the
  * notification listener (MediaListener), turned on once with adb.
- * Remote: ← → move the lyrics earlier or later (if they run ahead or behind), OK pauses, ⏪ ⏩ change the song.
+ * Remote: ← → move the lyrics earlier or later (if they run ahead or behind), OK pauses, ⏪ ⏩ change the song,
+ * ↑ searches a song (typed or dictated; Spotify plays it through its own "play from search"), ↓ opens Spotify to pick one
+ * there: as soon as a new song starts, the karaoke comes back by itself. It keeps following the music from behind.
  */
 public class KaraokeActivity extends Activity {
     static final String LISTENER = "io.freemytv/io.freemytv.MediaListener";
@@ -61,31 +73,138 @@ public class KaraokeActivity extends Activity {
     private String trackKey = "", title = "", artist = "";
     private Lyrics lyrics;
     private long offsetMs, offsetShownAt = -10_000;
+    private boolean resumed, returnOnNextSong;
+    private EditText search;
+    static final String SPOTIFY = "com.spotify.tv.android";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Ui.init(this);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         view = new KaraokeView(this);
-        setContentView(view);
+        FrameLayout root = new FrameLayout(this);
+        root.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        search = makeSearchBox();
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP);
+        int side = (int) (getResources().getDisplayMetrics().widthPixels * 0.22f);
+        lp.setMargins(side, (int) (getResources().getDisplayMetrics().heightPixels * 0.2f), side, 0);
+        root.addView(search, lp);
+        setContentView(root);
         getWindow().setBackgroundDrawable(null);
+        // Followed from creation to the end, not only while in front: a song picked in Spotify brings us back.
+        connect();
     }
 
     @Override protected void onResume() {
         super.onResume();
-        connect();
+        resumed = true;
+        if (state == NO_ACCESS) { disconnect(); connect(); }
+        else refreshQuietly();
         view.start();
     }
 
     @Override protected void onPause() {
+        resumed = false;
         view.stop();
-        disconnect();
         super.onPause();
     }
 
     @Override protected void onDestroy() {
+        disconnect();
         io.shutdownNow();
         super.onDestroy();
+    }
+
+    private void refreshQuietly() {
+        try {
+            if (sessions != null) pick(sessions.getActiveSessions(listener));
+        } catch (SecurityException e) {
+            state = NO_ACCESS;
+        }
+    }
+
+    // MARK: - Choosing songs without leaving
+
+    private EditText makeSearchBox() {
+        EditText e = new EditText(this);
+        e.setSingleLine(true);
+        e.setInputType(InputType.TYPE_CLASS_TEXT);
+        e.setImeOptions(EditorInfo.IME_ACTION_SEARCH | EditorInfo.IME_FLAG_NO_FULLSCREEN);
+        e.setHint(Ui.tr("Música ou artista…", "Song or artist…", "Canción o artista…"));
+        e.setTextColor(0xFFFFFFFF);
+        e.setHintTextColor(0x99FFFFFF);
+        e.setTextSize(TypedValue.COMPLEX_UNIT_PX, getResources().getDisplayMetrics().widthPixels / 1920f * 44);
+        e.setTypeface(Ui.medium);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(0xCC15151C);
+        bg.setStroke(3, 0x66FFFFFF);
+        bg.setCornerRadius(44);
+        e.setBackground(bg);
+        int pad = (int) (getResources().getDisplayMetrics().widthPixels / 1920f * 34);
+        e.setPadding(pad, pad / 2, pad, pad / 2);
+        e.setVisibility(View.GONE);
+        e.setOnEditorActionListener((v, actionId, event) -> {
+            String q = v.getText().toString().trim();
+            closeSearch();
+            if (!q.isEmpty()) play(q);
+            return true;
+        });
+        return e;
+    }
+
+    private void openSearch() {
+        search.setText("");
+        search.setVisibility(View.VISIBLE);
+        search.requestFocus();
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.showSoftInput(search, InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    private void closeSearch() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) imm.hideSoftInputFromWindow(search.getWindowToken(), 0);
+        search.setVisibility(View.GONE);
+        view.requestFocus();
+    }
+
+    /** Spotify plays the best match through its own "play from search"; else its search opens, and we come back. */
+    private void play(String query) {
+        PlaybackState s = controller == null ? null : controller.getPlaybackState();
+        boolean canSearch = controller != null && controller.getPackageName().contains("spotify") && s != null
+                && (s.getActions() & PlaybackState.ACTION_PLAY_FROM_SEARCH) != 0;
+        if (canSearch) {
+            controller.getTransportControls().playFromSearch(query, new Bundle());
+            Toast.makeText(this, Ui.tr("Tocando: ", "Playing: ", "Poniendo: ") + query, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + Uri.encode(query))).setPackage(SPOTIFY);
+        if (!openSpotify(i)) openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
+    }
+
+    /** Spotify in front; the karaoke returns as soon as a new song starts there. */
+    private boolean openSpotify(Intent i) {
+        if (i == null) return false;
+        try {
+            returnOnNextSong = true;
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Toast.makeText(this, Ui.tr("Escolha uma música: o karaokê volta sozinho", "Pick a song: the karaoke comes back by itself",
+                    "Elegí una canción: el karaoke vuelve solo"), Toast.LENGTH_LONG).show();
+            return true;
+        } catch (RuntimeException e) {
+            returnOnNextSong = false;
+            return false;
+        }
+    }
+
+    private void comeBack() {
+        if (resumed || !returnOnNextSong) return;
+        returnOnNextSong = false;
+        try {
+            startActivity(new Intent(this, KaraokeActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+        } catch (RuntimeException e) {
+            AppLog.w("karaoke: couldn't come back: " + e.getMessage());
+        }
     }
 
     // MARK: - What's playing
@@ -178,6 +297,7 @@ public class KaraokeActivity extends Activity {
         }
         if (same) return;
         trackKey = key;
+        comeBack();
         offsetMs = 0;
         lyrics = null;
         if (CACHE.containsKey(key)) {
@@ -243,7 +363,21 @@ public class KaraokeActivity extends Activity {
 
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
         int code = e.getKeyCode();
+        if (search.getVisibility() == View.VISIBLE) {
+            if (code == KeyEvent.KEYCODE_BACK && e.getAction() == KeyEvent.ACTION_UP) { closeSearch(); return true; }
+            if (code == KeyEvent.KEYCODE_BACK) return true;
+            return super.dispatchKeyEvent(e);
+        }
         if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_HOME) return super.dispatchKeyEvent(e);
+        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0
+                && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_SEARCH)) {
+            openSearch();
+            return true;
+        }
+        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() == 0 && code == KeyEvent.KEYCODE_DPAD_DOWN) {
+            openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
+            return true;
+        }
         if (e.getAction() != KeyEvent.ACTION_DOWN) return isOurs(code) || super.dispatchKeyEvent(e);
         MediaController.TransportControls tc = controller == null ? null : controller.getTransportControls();
         switch (code) {
@@ -276,6 +410,7 @@ public class KaraokeActivity extends Activity {
     private static boolean isOurs(int code) {
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_RIGHT: case KeyEvent.KEYCODE_DPAD_LEFT: case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_DPAD_UP: case KeyEvent.KEYCODE_DPAD_DOWN: case KeyEvent.KEYCODE_SEARCH:
             case KeyEvent.KEYCODE_ENTER: case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE: case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
             case KeyEvent.KEYCODE_MEDIA_NEXT: case KeyEvent.KEYCODE_MEDIA_REWIND: case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
                 return true;
@@ -417,8 +552,10 @@ public class KaraokeActivity extends Activity {
             switch (state) {
                 case NO_ACCESS: drawNoAccess(c); break;
                 case WAITING:
-                    drawState(c, Ui.tr("Coloque uma música no Spotify", "Play a song on Spotify", "Poné una canción en Spotify"),
-                            Ui.tr("A letra aparece aqui, sincronizada.", "The lyrics show up here, in sync.", "La letra aparece acá, sincronizada."));
+                    drawState(c, Ui.tr("▲ Busque uma música", "▲ Search a song", "▲ Buscá una canción"),
+                            Ui.tr("ou ▼ escolha no Spotify: a letra aparece aqui, sincronizada.",
+                                    "or ▼ pick it in Spotify: the lyrics show up here, in sync.",
+                                    "o ▼ elegila en Spotify: la letra aparece acá, sincronizada."));
                     break;
                 case LOADING:
                     drawState(c, Ui.tr("Procurando a letra…", "Looking for the lyrics…", "Buscando la letra…"), null);
@@ -478,8 +615,10 @@ public class KaraokeActivity extends Activity {
                 c.drawText(ellipsize(title, titleP, 1050 * k), tx, y + 58 * k, titleP);
                 c.drawText(ellipsize(artist, artistP, 1050 * k), tx, y + 106 * k, artistP);
             }
-            c.drawText(Ui.tr("◀ ▶ ajustar letra · OK pausa · ⏪ ⏩ música", "◀ ▶ adjust lyrics · OK pause · ⏪ ⏩ song",
-                    "◀ ▶ ajustar letra · OK pausa · ⏪ ⏩ tema"), w - 80 * k, y + 40 * k, hintP);
+            c.drawText(Ui.tr("▲ buscar · ▼ escolher no Spotify · OK pausa", "▲ search · ▼ pick in Spotify · OK pause",
+                    "▲ buscar · ▼ elegir en Spotify · OK pausa"), w - 80 * k, y + 40 * k, hintP);
+            c.drawText(Ui.tr("◀ ▶ ajustar letra · ⏪ ⏩ música", "◀ ▶ adjust lyrics · ⏪ ⏩ song",
+                    "◀ ▶ ajustar letra · ⏪ ⏩ tema"), w - 80 * k, y + 78 * k, hintP);
         }
 
         private void drawState(Canvas c, String line, String sub) {

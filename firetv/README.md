@@ -44,7 +44,9 @@ moving background in the album's colors. Lyrics come from LRCLIB (lrclib.net). I
 adb shell settings put secure enabled_notification_listeners io.freemytv/io.freemytv.MediaListener
 ```
 
-On the remote: ◀ ▶ move the lyrics earlier or later, OK pauses, ⏪ ⏩ change the song, Back leaves.
+On the remote: ▲ searches a song (Spotify plays the best match), ▼ opens Spotify to pick one (the karaoke comes back
+as soon as it starts), ◀ ▶ move the lyrics earlier or later, OK pauses, ⏪ ⏩ change the song, Back leaves. Songs
+queued from phones (Spotify Connect) show up by themselves.
 
 ## What changes on Fire TV
 
