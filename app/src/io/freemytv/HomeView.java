@@ -58,7 +58,7 @@ import java.util.function.Consumer;
  * Measurements are in a 1920×1080 space (k = width / 1920). The screen is split into layers so the TV's weak GPU only
  * redraws what changed.
  */
-final class HomeView extends ViewGroup implements Choreographer.FrameCallback, HomeData.Listener, Recs.Listener {
+final class HomeView extends ViewGroup implements Choreographer.FrameCallback, HomeData.Listener, Recs.Listener, YouTube.Listener {
     // tvOS grid (Human Interface Guidelines): content inside the safe area, 80 px from the sides and 60 from top and
     // bottom; 40 px between items; 7 columns of 217 px (the apps). The shelf glass extends 36 px past the tiles (the
     // same padding on all four sides) and the tile corners are concentric with it (glass radius = radius + padding).
@@ -102,6 +102,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private static final String[] TABS_DE = {"Entdecken", "Filme", "Serien"};
     private static final String[] TAB_KIND = {null, "movie", "tv"};
     private static final int Z_TOP = 4, Z_CARDS = 5;
+    // Fire TV design (WALL): at the top, the weather over photos of places around the world (Wallpapers), changing
+    // every few minutes; below, a smaller row with the latest videos of the YouTube channels you follow (YouTube);
+    // then the shelf and the drawer as always. No movie picks, so ↑ from the shelf reaches the videos and then the
+    // corner buttons right away.
+    private static final boolean WALL = Ui.FIRE;
+    private static final int Z_VIDEOS = 7;
+    private static final float V_TOP = 560, V_W = 288, V_H = 162, V_GAP = 32;
+    private static final int V_VISIBLE = 5;
 
     private final Activity activity;
     private final Scene scene = new Scene();
@@ -145,6 +153,29 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final List<HomeApps.Item> lightButtons = new ArrayList<>();
     private Paint lTitle, lTab, lTabOn, lCardTitle, lCardMeta, lQuote, lTip, lDate, lClock, lWeather, lClockQuote;
     private Shader lightGradient;
+
+    // Fire TV design: wallpapers, weather and the YouTube row
+    private Wallpapers wallpapers;
+    private YouTube youtube;
+    private String wallCaption = "";
+    private List<YouTube.Video> videos = new ArrayList<>();
+    private Spring[] videoFocus = new Spring[0];
+    private RectF[] videoRects = new RectF[0];
+    private String[] videoTitle = new String[0], videoMeta = new String[0];
+    private final Spring videoScroll = new Spring(0.34f, 1f, 0);
+    private int videoIndex;
+    private Paint wTemp, wCond, wSmall, wHour, wHourTemp, wHeader, wVideoTitle, wVideoMeta, wCaption, wCode;
+    private String wLine = "", wTempText = "", wCondText = "", wMaxMin = "";
+    private final String[] wHourText = new String[6], wHourTempText = new String[6], wHourSymbol = new String[6];
+    private int wHours;
+    private String wSymbol;
+    private long wTextMinute = -1, wTextWeatherAt = -1;
+    private final Wallpapers.Listener wallListener = (b, caption) -> {
+        wallCaption = caption == null ? "" : caption;
+        showBackdrop(b);
+        heroDirty = true;
+        wake();
+    };
 
     // Shelf
     private List<HomeApps.Item> shelf = new ArrayList<>();
@@ -341,6 +372,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             updatePalette();
             checkNight(true);
             updatePicks();      // three new ones every hour
+            if (WALL) {
+                wallpapers.rotateIfDue(false, wallListener);
+                youtube.refreshIfStale();
+                heroDirty = true;   // "3 h ago" and the clock line
+            }
             handler.postDelayed(this, 15_000);
         }
     };
@@ -382,6 +418,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             cardRects[i] = new RectF();
         }
         makeLightButtons();
+        if (WALL) {
+            wallpapers = new Wallpapers(a);
+            youtube = YouTube.get(a);
+        }
         recs.setLight(true);
         checkNight(false);
         sheetLayer.setVisibility(INVISIBLE);
@@ -412,6 +452,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         reload();
         updatePalette();
         updatePicks();
+        if (WALL) {
+            youtube.addListener(this);
+            youtube.refreshIfStale();
+            setVideos(youtube.videos);
+            wallpapers.rotateIfDue(bgTo == null, wallListener);
+        }
         if (sheetOpen) closeSheet();
         sheet.snap(sheet.target);
         motionDirty = true;
@@ -432,7 +478,73 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         handler.removeCallbacks(reloadSoon);
         data.removeListener(this);
         recs.removeListener(this);
+        if (WALL) youtube.removeListener(this);
         if (tvInputs != null) tvInputs.unregisterCallback(inputCallback);
+    }
+
+    @Override public void onYouTube() {
+        wake();
+        setVideos(youtube.videos);
+        heroDirty = true;
+    }
+
+    /** New list of videos: one focus spring and rect per video, the titles fitted to the card width once. */
+    private void setVideos(List<YouTube.Video> list) {
+        String focusedId = videoIndex < videos.size() ? videos.get(videoIndex).id : null;
+        videos = list;
+        if (videoFocus.length != list.size()) {
+            videoFocus = new Spring[list.size()];
+            videoRects = new RectF[list.size()];
+            for (int i = 0; i < list.size(); i++) {
+                videoFocus[i] = new Spring(0.32f, 0.78f, 0);
+                videoRects[i] = new RectF();
+            }
+        }
+        videoIndex = Math.min(videoIndex, Math.max(0, list.size() - 1));
+        for (int i = 0; i < list.size(); i++) if (list.get(i).id.equals(focusedId)) videoIndex = i;
+        fitVideoTexts();
+        if (zone == Z_VIDEOS && list.isEmpty()) zone = Z_SHELF;
+        aimVideoScroll(true);
+        retarget(true);
+    }
+
+    private void fitVideoTexts() {
+        if (wVideoTitle == null) return;
+        if (videoTitle.length != videos.size()) {
+            videoTitle = new String[videos.size()];
+            videoMeta = new String[videos.size()];
+        }
+        float width = V_W * k;
+        for (int i = 0; i < videos.size(); i++) {
+            YouTube.Video v = videos.get(i);
+            fitPaint.set(wVideoTitle);
+            videoTitle[i] = TextUtils.ellipsize(v.title, fitPaint, width, TextUtils.TruncateAt.END).toString();
+            fitPaint.set(wVideoMeta);
+            videoMeta[i] = TextUtils.ellipsize(v.channel + " · " + YouTube.ago(v.published), fitPaint, width, TextUtils.TruncateAt.END).toString();
+        }
+    }
+
+    /** Keeps the focused video in view (it scrolls when the focus nears an edge). */
+    private void aimVideoScroll(boolean snap) {
+        float target = videoScroll.target;
+        if (videoIndex < target + 1) target = videoIndex - 1;
+        else if (videoIndex > target + V_VISIBLE - 2) target = videoIndex - V_VISIBLE + 2;
+        target = Math.max(0, Math.min(Math.max(0, videos.size() - V_VISIBLE), target));
+        videoScroll.target = target;
+        if (snap) videoScroll.snap(target);
+    }
+
+    /** The video nearest to x, among the ones in view. */
+    private int nearestVideo(float x) {
+        int best = 0;
+        float bestDistance = Float.MAX_VALUE, step = (V_W + V_GAP) * k;
+        for (int i = 0; i < videos.size(); i++) {
+            float cx = MARGIN * k + (i - videoScroll.target) * step + V_W * k / 2;
+            if (cx < 0 || cx > w) continue;
+            float d = Math.abs(cx - x);
+            if (d < bestDistance) { bestDistance = d; best = i; }
+        }
+        return best;
     }
 
     void destroy() {
@@ -506,7 +618,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         int width = MeasureSpec.getSize(widthSpec), height = MeasureSpec.getSize(heightSpec);
         float kk = width / 1920f;
         measure(sky, width, height);
-        measure(heroLayer, width, Math.round(790 * kk));
+        measure(heroLayer, width, Math.round(800 * kk));
         measure(status, Math.round(1160 * kk), Math.round(240 * kk));
         // Sized to what they draw (the glass and its shadow; the grown tiles and their shadows): smaller layers are
         // cheaper for the GPU to composite on every frame of the drawer animation.
@@ -624,6 +736,26 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         shadowSoft.setMaskFilter(new BlurMaskFilter(12 * k, BlurMaskFilter.Blur.NORMAL));
         shadowDeep.setMaskFilter(new BlurMaskFilter(DEEP_BLUR * k, BlurMaskFilter.Blur.NORMAL));
         halo.setMaskFilter(new BlurMaskFilter(22 * k, BlurMaskFilter.Blur.NORMAL));
+        // Fire TV design: white on the photo, with soft shadows.
+        wTemp = Ui.numbers(Ui.light, 150 * k, 0xFFFFFFFF);
+        wCond = Ui.text(Ui.semibold, 40 * k, 0xFFFFFFFF);
+        wSmall = Ui.text(Ui.medium, 32 * k, 0xE6FFFFFF);
+        wHour = Ui.numbers(Ui.medium, 24 * k, 0xCCFFFFFF);
+        wHour.setTextAlign(Paint.Align.CENTER);
+        wHourTemp = Ui.numbers(Ui.semibold, 28 * k, 0xFFFFFFFF);
+        wHourTemp.setTextAlign(Paint.Align.CENTER);
+        wHeader = Ui.text(Ui.semibold, 27 * k, 0xE6FFFFFF);
+        wVideoTitle = Ui.text(Ui.semibold, 24 * k, 0xFFFFFFFF);
+        wVideoMeta = Ui.text(Ui.medium, 20 * k, 0xB3FFFFFF);
+        wCaption = Ui.text(Ui.medium, 22 * k, 0xB3FFFFFF);
+        wCaption.setTextAlign(Paint.Align.RIGHT);
+        wCode = Ui.numbers(Ui.semibold, 72 * k, 0xFFFFFFFF);
+        wCode.setLetterSpacing(0.12f);
+        for (Paint p : new Paint[] {wTemp, wCond, wSmall, wHour, wHourTemp, wHeader, wVideoTitle, wVideoMeta, wCaption, wCode}) {
+            p.setShadowLayer(18 * k, 0, 2 * k, 0x8C000000);
+        }
+        wTextMinute = -1;
+        fitVideoTexts();
         border.setStyle(Paint.Style.STROKE);
         border.setStrokeWidth(2 * k);
         rim.setStyle(Paint.Style.STROKE);
@@ -643,6 +775,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean statusMoving = step(statusFocus, dt);
         boolean heroMoving = heroFocus.step(dt);
         boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt);
+        cardsMoving |= step(videoFocus, dt) | videoScroll.step(dt);
         if (topMoving) status.invalidate();
         heroMoving |= topMoving | cardsMoving;
         boolean drawerItemsMoving = step(drawerFocus, dt);
@@ -841,6 +974,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** What the glass shows: the photo lightened (by day), darkened (at night) or blended in between. */
     private int[] glassOf(Backdrop b) {
+        if (b.lightGlass == null) return b.glass;   // a wallpaper: the photo itself, already with its scrims
         if (b.nightGlass == null || night <= 0.001f) return b.lightGlass;
         if (night >= 0.999f) return b.nightGlass;
         // During the transition, the blend (only for the current background; a photo fading in uses the nearer side).
@@ -872,7 +1006,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Day or night right now (from the sun at your location); `animate`: with the transition. */
     private void checkNight(boolean animate) {
-        boolean want = data.isNight(System.currentTimeMillis());
+        boolean want = WALL || data.isNight(System.currentTimeMillis());   // on the photos: always white text
         if (want == nightTarget) return;
         nightTarget = want;
         if (animate && running) {
@@ -1707,6 +1841,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (snap) heroFocus.snap(heroFocus.target);
         boolean topChanged = aim(topFocus, !sheetOpen && zone == Z_TOP ? topIndex : -1, snap);
         heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | topChanged;
+        heroChanged |= aim(videoFocus, !sheetOpen && zone == Z_VIDEOS ? videoIndex : -1, snap);
         statusChanged |= topChanged;
         tilesDirty |= snap || tilesChanged;
         statusDirty |= snap || statusChanged;
@@ -2166,6 +2301,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             }
             it = lightButtons.get(topIndex - 3);
             r = topRects[topIndex];
+        } else if (zone == Z_VIDEOS) {
+            if (videoIndex >= videos.size()) return;
+            click.open();
+            YouTube.open(activity, videos.get(videoIndex));
+            return;
         } else if (zone == Z_CARDS) {
             Recs.Pick p = cardIndex < cards.size() ? cards.get(cardIndex) : null;
             if (p == null || p.pkg == null) return;
@@ -2406,6 +2546,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         for (int i = picksOn() ? 0 : 3; i < 3 + lightButtons.size(); i++) out.add(a11yId(Z_TOP, i));
         for (int i = 0; i < Math.min(3, cards.size()); i++) out.add(a11yId(Z_CARDS, i));
+        for (int i = 0; i < videos.size(); i++) out.add(a11yId(Z_VIDEOS, i));
         for (int i = 0; i < shelf.size(); i++) out.add(a11yId(Z_SHELF, i));
         for (int i = 0; i < drawerItems.size(); i++) out.add(a11yId(Z_DRAWER, i));
         if (drawerOpen && Prefs.weather()) out.add(a11yId(WIDGETS, 0));
@@ -2422,6 +2563,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= 3) return label(lightButtons, i - 3);
                 return tabs()[i] + Ui.tr(", aba ", ", tab ") + (i + 1) + Ui.tr(" de 3", " of 3");
             case Z_CARDS: return i < cards.size() ? pickText(cards.get(i)) : "";
+            case Z_VIDEOS: return i < videos.size() ? videos.get(i).title + ", " + videos.get(i).channel : "";
             case Z_SHELF:
                 if (reordering && i == shelfIndex) {
                     return Ui.tr("Movendo ", "Moving ", "Moviendo ") + label(shelf, i)
@@ -2461,6 +2603,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 a11yRect.set(cardRects[i]);
                 dy = heroLayer.getTranslationY();
                 break;
+            case Z_VIDEOS:
+                if (i >= videoRects.length) return false;
+                a11yRect.set(videoRects[i]);
+                dy = heroLayer.getTranslationY();
+                break;
             case Z_SHELF:
                 if (i >= tileRects.length) return false;
                 a11yRect.set(tileRects[i]);
@@ -2492,6 +2639,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         switch (zone) {
             case Z_TOP: return a11yId(Z_TOP, topIndex);
             case Z_CARDS: return cardIndex < cards.size() ? a11yId(Z_CARDS, cardIndex) : -1;
+            case Z_VIDEOS: return videoIndex < videos.size() ? a11yId(Z_VIDEOS, videoIndex) : -1;
             case Z_SHELF: return shelf.isEmpty() ? -1 : a11yId(Z_SHELF, shelfIndex);
             case Z_DRAWER: return drawerItems.isEmpty() ? -1 : a11yId(Z_DRAWER, drawerIndex);
             case WIDGETS: return a11yId(WIDGETS, widgetIndex);
@@ -2548,6 +2696,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 if (i >= cards.size()) return;
                 if (drawerOpen) closeDrawer();
                 cardIndex = i;
+                break;
+            case Z_VIDEOS:
+                if (i >= videos.size()) return;
+                if (drawerOpen) closeDrawer();
+                videoIndex = i;
+                aimVideoScroll(false);
                 break;
             case Z_SHELF:
                 if (i >= shelf.size()) return;
@@ -2634,6 +2788,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The three cards of the current tab (Explore, Movies, Shows) and the background taken from the first one. */
     private void updateCards() {
+        if (WALL) return;   // no movie picks: the wallpapers are the background
         List<Recs.Pick> list = recs.now(TAB_KIND[tab]);
         if (!samePicks(list, cards)) {
             cards = list;
@@ -2667,6 +2822,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean fading = bgFadeAt != 0;
         // Drawer open: the background lightens (by day) or darkens (at night), as a filter on the drawing itself.
         android.graphics.ColorFilter v = veil(tone(0.32f, 0.42f) * Ui.clamp(drawer.value), blend(0xFFFFFFFF, 0xFF000000, night));
+        if (WALL) {   // the place's photo, sharp, with its scrims; black until the first one arrives
+            c.drawColor(0xFF0B0B0D);
+            imagePaint.setColorFilter(v);
+            if (fading && bgFrom != null) drawImage(c, bgFrom.image, 1);
+            if (bgTo != null) drawImage(c, bgTo.image, fading ? e : 1);
+            imagePaint.setColorFilter(null);
+            return;
+        }
         if (bgTo == null || (fading && bgFrom == null)) {
             if (lightGradient == null) lightGradient = new LinearGradient(0, 0, 0, h, 0xFFF5F5F7, 0xFFE2E2E7, Shader.TileMode.CLAMP);
             if (nightGradient == null) nightGradient = new LinearGradient(0, 0, 0, h, 0xFF1C1C1E, 0xFF0B0B0D, Shader.TileMode.CLAMP);
@@ -2698,6 +2861,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void drawLightTop(Canvas c) {
         applyTone();
+        if (WALL) {
+            drawWallTop(c);
+            return;
+        }
         if (!picksOn()) {
             drawClock(c);
             if (HomeData.coinCount() > 0) drawQuotes(c);
@@ -2737,7 +2904,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private boolean picksOn() {
-        return Recs.hasKey(getContext());
+        return !WALL && Recs.hasKey(getContext());
     }
 
     private void drawClock(Canvas c) {
@@ -2864,6 +3031,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private boolean moveLight(int dx, int dy) {
+        if (WALL) return moveWall(dx, dy);
         switch (zone) {
             case Z_SHELF:
                 if (dy >= 0 || shelf.isEmpty()) return false;
@@ -2922,6 +3090,186 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 bestDistance = d;
                 best = i;
             }
+        }
+        return best;
+    }
+
+    // MARK: - Fire TV design: the weather over the wallpaper, and the YouTube row
+
+    /** The weather's texts, rebuilt only when the minute or the forecast changes (nothing allocated while drawing). */
+    private void updateWallText() {
+        HomeData.Weather wx = data.weather;
+        if (clockMinute == wTextMinute && data.weatherAt == wTextWeatherAt) return;
+        wTextMinute = clockMinute;
+        wTextWeatherAt = data.weatherAt;
+        String city = Prefs.city();
+        wLine = clockText + "  ·  " + dateText + (city.isEmpty() ? "" : "  ·  " + city);
+        if (Double.isNaN(wx.temp)) return;
+        wSymbol = Symbols.weather(wx.code, wx.isDay);
+        wTempText = HomeData.degrees(wx.temp);
+        wCondText = HomeData.condition(wx.code, wx.isDay);
+        wMaxMin = Ui.ru ? "Макс. " + HomeData.degrees(wx.max) + "   Мин. " + HomeData.degrees(wx.min)
+                : Ui.en ? "H: " + HomeData.degrees(wx.max) + "   L: " + HomeData.degrees(wx.min)
+                : Ui.de ? "H: " + HomeData.degrees(wx.max) + "   T: " + HomeData.degrees(wx.min)
+                : "Máx. " + HomeData.degrees(wx.max) + "   Mín. " + HomeData.degrees(wx.min);
+        wHours = Math.min(6, Math.min(wx.hours.size(), Math.min(wx.hourTemp.size(), Math.min(wx.hourCode.size(), wx.hourDay.size()))));
+        for (int i = 0; i < wHours; i++) {
+            wHourText[i] = HomeData.hour(wx.hours.get(i));
+            wHourTempText[i] = HomeData.degrees(wx.hourTemp.get(i));
+            wHourSymbol[i] = Symbols.weather(wx.hourCode.get(i), wx.hourDay.get(i));
+        }
+        fitVideoTexts();   // "3 h ago" moves on too
+    }
+
+    /**
+     * Top left: the time, date and city; the current weather large (symbol, temperature, condition, high and low) and
+     * the next six hours. Bottom right of that area, where the photo was taken. Then the YouTube row.
+     */
+    private void drawWallTop(Canvas c) {
+        updateWallText();
+        float x = MARGIN * k;
+        c.drawText(wLine, x, 118 * k, wSmall);
+        HomeData.Weather wx = data.weather;
+        if (Prefs.weather() && !Double.isNaN(wx.temp) && wSymbol != null) {
+            float size = 118 * k, sw = Symbols.width(getContext(), wSymbol, size);
+            Symbols.draw(getContext(), c, wSymbol, x + sw / 2, 246 * k, size, 0xFFFFFFFF);
+            float tx = x + sw + 30 * k;
+            c.drawText(wTempText, tx, 298 * k, wTemp);
+            float cx = tx + wTemp.measureText(wTempText) + 44 * k;
+            c.drawText(wCondText, cx, 236 * k, wCond);
+            c.drawText(wMaxMin, cx, 290 * k, wSmall);
+            for (int i = 0; i < wHours; i++) {
+                float hx = x + 44 * k + i * 128 * k;
+                c.drawText(wHourText[i], hx, 378 * k, wHour);
+                Symbols.draw(getContext(), c, wHourSymbol[i], hx, 414 * k, 40 * k, 0xF2FFFFFF);
+                c.drawText(wHourTempText[i], hx, 466 * k, wHourTemp);
+            }
+        }
+        if (!wallCaption.isEmpty()) c.drawText(wallCaption, CONTENT_R * k, 500 * k, wCaption);
+        drawVideos(c);
+        if (HomeData.coinCount() > 0) drawQuotes(c);
+    }
+
+    /** The YouTube row: thumbnails (the focused one grows and lights its rim), title, channel and how long ago. */
+    private void drawVideos(Canvas c) {
+        float x = MARGIN * k, top = V_TOP * k;
+        int state = youtube.state;
+        if (state == YouTube.LOGIN) {
+            c.drawText(Ui.tr("Conecte o YouTube para ver suas inscrições", "Connect YouTube to see your subscriptions",
+                    "Conectá YouTube para ver tus suscripciones"), x, top + 20 * k, wCond);
+            c.drawText(Ui.tr("No celular, entre em ", "On your phone, go to ", "En el celu entrá a ") + youtube.verifyUrl
+                    + Ui.tr(" e digite:", " and enter:", " y poné:"), x, top + 74 * k, wSmall);
+            c.drawText(youtube.userCode, x, top + 170 * k, wCode);
+            return;
+        }
+        if (videos.isEmpty()) {
+            if (state == YouTube.ERROR) c.drawText("YouTube: " + youtube.error, x, top + 20 * k, wSmall);
+            return;
+        }
+        c.drawText(Ui.tr("YouTube · Suas inscrições", "YouTube · Your subscriptions", "YouTube · Tus suscripciones"),
+                x, top - 22 * k, wHeader);
+        float cw = V_W * k, ch = V_H * k, step = (V_W + V_GAP) * k, r0 = 14 * k, sc = videoScroll.value;
+        int focusedOne = -1;
+        for (int pass = 0; pass < 2; pass++) {   // the focused card last, on top of its neighbors
+            for (int i = 0; i < videos.size(); i++) {
+                float vx = x + (i - sc) * step;
+                videoRects[i].set(vx, top, vx + cw, top + ch);
+                if (vx > w || vx + cw < 0) continue;
+                float v = videoFocus[i].value;
+                boolean focused = v > 0.02f && (focusedOne < 0 || v > videoFocus[focusedOne].value);
+                if (pass == 0 && focused) { focusedOne = i; continue; }
+                if (pass == 1 && i != focusedOne) continue;
+                drawVideo(c, i, videoRects[i], v, r0);
+            }
+        }
+    }
+
+    private void drawVideo(Canvas c, int i, RectF base, float v, float r0) {
+        float f = Ui.clamp(v), s = 1 + 0.08f * v;
+        float bw = base.width(), bh = base.height(), cx = base.centerX(), cy = base.centerY() - 4 * k * v;
+        cell.set(cx - bw * s / 2, cy - bh * s / 2, cx + bw * s / 2, cy + bh * s / 2);
+        float r = r0 * s;
+        tmp.set(cell);
+        tmp.offset(0, (8 + 10 * f) * k);
+        shadowDeep.setColor(Ui.alpha(0xFF000000, 0.35f + 0.25f * f));
+        shadows.draw(c, tmp, r, DEEP_BLUR * k, shadowDeep);
+        Bitmap img = videos.get(i).image;
+        if (img != null) {
+            roundImage(c, img, cell, r);
+        } else {
+            fill.setShader(null);
+            fill.setColor(0xFF2C2C2E);
+            c.drawRoundRect(cell, r, r, fill);
+        }
+        if (f > 0.01f) {
+            rim.setShader(null);
+            rim.setColor(Ui.alpha(0xFFFFFFFF, f));
+            rim.setStrokeWidth(3 * k);
+            c.drawRoundRect(cell, r, r, rim);
+            rim.setStrokeWidth(2.5f * k);
+        }
+        if (i < videoTitle.length) {
+            c.drawText(videoTitle[i], base.left, base.bottom + 34 * k, wVideoTitle);
+            c.drawText(videoMeta[i], base.left, base.bottom + 62 * k, wVideoMeta);
+        }
+    }
+
+    /** Fire TV: shelf ↔ videos ↔ corner buttons (no tabs or picks in between). */
+    private boolean moveWall(int dx, int dy) {
+        switch (zone) {
+            case Z_SHELF:
+                if (dy >= 0 || shelf.isEmpty()) return false;
+                if (!videos.isEmpty()) {
+                    zone = Z_VIDEOS;
+                    videoIndex = nearestVideo(tileRects[shelfIndex].centerX());
+                } else {
+                    zone = Z_TOP;
+                    topIndex = 3 + nearestButton(tileRects[shelfIndex].centerX());
+                }
+                break;
+            case Z_VIDEOS:
+                if (dx != 0) {
+                    int next = Math.max(0, Math.min(videos.size() - 1, videoIndex + dx));
+                    if (next == videoIndex) return true;
+                    videoIndex = next;
+                    aimVideoScroll(false);
+                } else if (dy < 0) {
+                    zone = Z_TOP;
+                    topIndex = 3 + nearestButton(videoRects[videoIndex].centerX());
+                } else {
+                    zone = Z_SHELF;
+                    if (!shelf.isEmpty()) shelfIndex = nearest(tileRects, tileRects.length, videoRects[videoIndex].centerX());
+                }
+                break;
+            case Z_TOP:
+                if (dx != 0) {
+                    int next = Math.max(3, Math.min(5, topIndex + dx));
+                    if (next == topIndex) return true;
+                    topIndex = next;
+                } else if (dy > 0) {
+                    if (!videos.isEmpty()) {
+                        zone = Z_VIDEOS;
+                    } else {
+                        zone = Z_SHELF;
+                    }
+                } else {
+                    return true;
+                }
+                break;
+            default:
+                return false;
+        }
+        retarget(false);
+        click.move();
+        return true;
+    }
+
+    private int nearestButton(float x) {
+        int best = 0;
+        float bestDistance = Float.MAX_VALUE;
+        for (int i = 0; i < 3; i++) {
+            float d = Math.abs(topRects[3 + i].centerX() - x);
+            if (d < bestDistance) { bestDistance = d; best = i; }
         }
         return best;
     }

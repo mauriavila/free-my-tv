@@ -66,6 +66,23 @@ The background is a club: out-of-focus colored lights, moving heads from the cei
 dots and sparkles; the lyrics light up like neon tubes as they're sung. It moves on its own; to make them swell on the beat (BeatPulse reads only the
 sound's spectrum, through Android's Visualizer), once: `adb shell pm grant io.freemytv android.permission.RECORD_AUDIO`.
 
+## The home screen
+
+At the top, the weather (now, high and low, the next six hours) over photos of beautiful places around the world
+(Bing's photos of the day, no key needed), a new one every 5 minutes with the place in the corner. Below, a smaller row
+with the latest videos of the YouTube channels you follow (newest first, no Shorts); OK opens one in YouTube. Then the
+shelf and the drawer. ↑ from the shelf goes to the videos, ↑ again to the corner buttons.
+
+YouTube offers no way to read an account's recommendations, so the row is your subscriptions. Once:
+
+1. console.cloud.google.com → a new project → APIs & Services → Library → **YouTube Data API v3** → Enable.
+2. OAuth consent screen: External, any name, your email; then **Publish app** (in testing, Google signs you out
+   every 7 days).
+3. Credentials → Create credentials → OAuth client ID → **TVs and Limited Input devices** → copy the ID and secret.
+4. `adb push youtube_key.txt /sdcard/Android/data/io.freemytv/files/youtube_key.txt` (one line, `CLIENT_ID:CLIENT_SECRET`).
+5. Open Free My TV: the row shows a code; enter it at google.com/device on your phone and allow (Google warns the app
+   isn't verified, since it's yours: Advanced → continue). The token stays in the app's private files.
+
 ## Smart lights (Tuya, LEDVANCE SMART+ WiFi, Smart Life)
 
 The drawer gets **Lights** (on, off, movie mode, warm, cool, party) and **Movie** (low warm light in one press), and the
