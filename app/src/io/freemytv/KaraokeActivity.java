@@ -124,6 +124,7 @@ public class KaraokeActivity extends Activity {
 
     @Override protected void onDestroy() {
         Lights.partyStop(this);
+        if (browser != null) browser.disconnect();
         disconnect();
         io.shutdownNow();
         super.onDestroy();
@@ -135,7 +136,7 @@ public class KaraokeActivity extends Activity {
 
     private final MediaController.Callback callback = new MediaController.Callback() {
         @Override public void onMetadataChanged(MediaMetadata metadata) { onMetadata(metadata); }
-        @Override public void onPlaybackStateChanged(PlaybackState s) { view.invalidate(); }
+        @Override public void onPlaybackStateChanged(PlaybackState s) { tryPending(); view.invalidate(); }
         @Override public void onSessionDestroyed() { refresh(); }
     };
 
@@ -183,15 +184,18 @@ public class KaraokeActivity extends Activity {
             controller = best;
             if (controller != null) controller.registerCallback(callback, main);
         }
-        if (controller != null && pendingUri != null && canPlayUri()) {
-            String uri = pendingUri;
-            pendingUri = null;
-            controller.getTransportControls().playFromUri(Uri.parse(uri), new Bundle());
-            returnOnNextSong = true;
-            AppLog.w("karaoke: played the waiting song once Spotify was up");
-        }
+        tryPending();
         if (same) return;
         if (controller == null) setWaiting(); else onMetadata(controller.getMetadata());
+    }
+
+    /** The song waiting for Spotify, as soon as Spotify's session can take it. */
+    private void tryPending() {
+        if (controller == null || pendingUri == null || !canPlayUri()) return;
+        String uri = pendingUri;
+        pendingUri = null;
+        controller.getTransportControls().playFromUri(Uri.parse(uri), new Bundle());
+        AppLog.w("karaoke: played the waiting song once Spotify was up");
     }
 
     private void setWaiting() {
@@ -387,7 +391,7 @@ public class KaraokeActivity extends Activity {
                 && (s == null || (s.getActions() & PlaybackState.ACTION_PLAY_FROM_URI) != 0);
     }
 
-    /** Spotify plays it in the background; if Spotify isn't running yet, it opens, plays it, and we come back. */
+    /** Spotify plays it in the background; if Spotify isn't running yet, wakeSpotify starts it behind the karaoke. */
     private void play(SpotifyCatalog.Track t) {
         results = null;
         if (canPlayUri()) {
@@ -396,7 +400,81 @@ public class KaraokeActivity extends Activity {
             return;
         }
         pendingUri = t.uri();
-        openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
+        Toast.makeText(this, Ui.tr("Acordando o Spotify…", "Waking Spotify up…", "Despertando Spotify…"), Toast.LENGTH_SHORT).show();
+        wakeSpotify(t.uri());
+    }
+
+    private android.media.browse.MediaBrowser browser;
+
+    /**
+     * Spotify isn't playing (so it has no session to take the song): wake it up behind the karaoke. First its media
+     * browser (if Spotify accepts us, its session plays the song straight away), then a Play key to Spotify itself
+     * and then to the last player, both of which start it in the background; tryPending plays the song as soon as its
+     * session shows up. Only if none of that works in 8 s does Spotify open on the song (and the karaoke come back).
+     */
+    private void wakeSpotify(final String uri) {
+        ComponentName service = spotifyService();
+        if (service != null) {
+            try {
+                if (browser != null) browser.disconnect();
+                browser = new android.media.browse.MediaBrowser(this, service, new android.media.browse.MediaBrowser.ConnectionCallback() {
+                    @Override public void onConnected() {
+                        if (!uri.equals(pendingUri) || browser == null) return;
+                        pendingUri = null;
+                        new MediaController(KaraokeActivity.this, browser.getSessionToken()).getTransportControls()
+                                .playFromUri(Uri.parse(uri), new Bundle());
+                        AppLog.w("karaoke: played through Spotify's media browser");
+                        main.postDelayed(KaraokeActivity.this::refresh, 1500);
+                    }
+
+                    @Override public void onConnectionFailed() {
+                        AppLog.w("karaoke: Spotify's media browser turned us down");
+                    }
+                }, null);
+                browser.connect();
+            } catch (RuntimeException e) {
+                AppLog.w("karaoke: media browser: " + e.getMessage());
+            }
+        }
+        main.postDelayed(() -> { if (uri.equals(pendingUri)) playKeyToSpotify(); }, 1200);
+        main.postDelayed(() -> {
+            if (!uri.equals(pendingUri)) return;
+            AppLog.w("karaoke: Play key to the last player");
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY));
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY));
+        }, 4000);
+        main.postDelayed(() -> {
+            if (!uri.equals(pendingUri)) return;
+            pendingUri = null;
+            AppLog.w("karaoke: Spotify didn't wake up behind us: opening it on the song");
+            if (!openSpotify(new Intent(Intent.ACTION_VIEW, Uri.parse(uri)).setPackage(SPOTIFY))) {
+                openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
+            }
+        }, 8000);
+    }
+
+    /** Spotify's media browser service, if it has one. */
+    private ComponentName spotifyService() {
+        Intent i = new Intent("android.media.browse.MediaBrowserService").setPackage(SPOTIFY);
+        List<android.content.pm.ResolveInfo> found = getPackageManager().queryIntentServices(i, 0);
+        if (found == null || found.isEmpty()) return null;
+        return new ComponentName(SPOTIFY, found.get(0).serviceInfo.name);
+    }
+
+    /** A Play key straight to Spotify's media button receivers, which start its player without its screen. */
+    private void playKeyToSpotify() {
+        Intent probe = new Intent(Intent.ACTION_MEDIA_BUTTON).setPackage(SPOTIFY);
+        List<android.content.pm.ResolveInfo> receivers = getPackageManager().queryBroadcastReceivers(probe, 0);
+        AppLog.w("karaoke: Play key to Spotify (" + (receivers == null ? 0 : receivers.size()) + " receivers)");
+        if (receivers == null) return;
+        for (android.content.pm.ResolveInfo r : receivers) {
+            ComponentName cn = new ComponentName(SPOTIFY, r.activityInfo.name);
+            for (int action : new int[] {KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP}) {
+                sendBroadcast(new Intent(Intent.ACTION_MEDIA_BUTTON).setComponent(cn)
+                        .putExtra(Intent.EXTRA_KEY_EVENT, new KeyEvent(action, KeyEvent.KEYCODE_MEDIA_PLAY)));
+            }
+        }
     }
 
     /** Spotify in front; the karaoke returns as soon as a new song starts there. */
