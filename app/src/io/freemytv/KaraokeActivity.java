@@ -506,7 +506,19 @@ public class KaraokeActivity extends Activity {
 
     // MARK: - The screen
 
-    private static final int[] LASER_COLORS = {0xFF39FF14, 0xFFFF1F5A, 0xFF00E5FF, 0xFFD500F9};   // green, red, cyan, violet
+    // The tunnel's walls, as pairs of hue steps (10° each): yellow and magenta, blue and violet, red and blue, cyan and pink.
+    private static final int[][] WALLS = {{6, 31}, {23, 28}, {0, 23}, {18, 32}};
+
+    // Neon tube colors for the lyrics: the glow, and the lighter core of the letters (each line its own).
+    private static final int[] NEON = {0xFFFF2BD6, 0xFF2BD9FF, 0xFFFFE14D, 0xFF39FF6A, 0xFFFF8A1F, 0xFFB06BFF};
+    private static final int[] NEON_CORE = new int[NEON.length];
+    static {
+        for (int i = 0; i < NEON.length; i++) {
+            int c = NEON[i];
+            NEON_CORE[i] = Color.rgb(Color.red(c) + (255 - Color.red(c)) * 3 / 5, Color.green(c) + (255 - Color.green(c)) * 3 / 5,
+                    Color.blue(c) + (255 - Color.blue(c)) * 3 / 5);
+        }
+    }
 
     private final class KaraokeView extends View implements Choreographer.FrameCallback {
         private boolean running;
@@ -514,41 +526,36 @@ public class KaraokeActivity extends Activity {
         private final long start = SystemClock.uptimeMillis();
         private long lastFrame;
 
-        // Background: the album art, tiny and stretched (as soft as a heavy blur), and three moving lights in its colors.
-        Bitmap art;
-        private Bitmap tiny;
-        private final Paint bgPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
-        private final Paint blob = new Paint();
-        private final RadialGradient[] blobs = new RadialGradient[3];
+        Bitmap art;   // the cover, in the header
         private final Matrix m = new Matrix();
         private final Paint veil = new Paint();
 
-        // Party, like a club: out-of-focus colored lights (bokeh), moving heads sweeping from the ceiling, a laser fan,
-        // a disco ball's dots crossing the walls and drifting sparkles; with BeatPulse they swell on the beat. Soft
-        // changes only: no strobe or full-screen flashes.
-        private static final int BEAMS = 6, SPARKS = 42, HUES = 36, BOKEH = 22, LASERS = 9, DOTS = 72;
-        private Bitmap disc;   // the soft disc every bokeh light is drawn from
+        // Background: an endless neon tunnel, flying forward like the party videos: twisted rings that change shape
+        // every so often, glowing nodes on their corners, spiral arms joining them, lights streaming past on the walls
+        // and the walls glowing in two colors. Faster and brighter on the beat; no strobe or full-screen flashes.
+        private static final int HUES = 36, RINGS = 20, SIDES_MAX = 8, TILES = 220;
+        private static final float GAP_Z = 0.45f, NEAR = 0.32f, FAR = RINGS * GAP_Z;
+        private final float[][] rx = new float[RINGS + 1][SIDES_MAX], ry = new float[RINGS + 1][SIDES_MAX];
+        private final float[] rz = new float[RINGS + 1];
+        private final int[] rid = new int[RINGS + 1];
+        private final float[] tz = new float[TILES], tcos = new float[TILES], tsin = new float[TILES], trad = new float[TILES];
+        private final java.util.Random rnd = new java.util.Random(7);
+        private final android.graphics.Path ringPath = new android.graphics.Path();
+        private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG), core = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint tilePaint = new Paint(Paint.ANTI_ALIAS_FLAG), wallPaint = new Paint();
         private final Paint spritePaint = new Paint(Paint.FILTER_BITMAP_FLAG);
-        private final Paint laserGlow = new Paint(Paint.ANTI_ALIAS_FLAG), laserCore = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final float[] bx = new float[BOKEH], by = new float[BOKEH], br = new float[BOKEH], bvx = new float[BOKEH],
-                bvy = new float[BOKEH], bph = new float[BOKEH];
-        private final int[] bhue = new int[BOKEH];
-        private final float[] dlon = new float[DOTS], dcos = new float[DOTS], dsin = new float[DOTS], dsize = new float[DOTS];
-        private final Paint beamPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint sparkPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final android.graphics.Path beam = new android.graphics.Path();
+        private RadialGradient wallLeft, wallRight;
+        private Bitmap disc;   // the soft dot every node is drawn from
         private final android.graphics.ColorFilter[] tints = new android.graphics.ColorFilter[HUES];
         private final int[] hueColors = new int[HUES];
-        private final float[] sx = new float[SPARKS], sy = new float[SPARKS], svx = new float[SPARKS], svy = new float[SPARKS],
-                sr = new float[SPARKS], sph = new float[SPARKS];
-        private float pulse;
-        private long songAt = -10_000;
+        private android.graphics.ColorFilter redTint;
+        private float travel, pulse;
         private final RectF rect = new RectF();
 
         private Shader artShader;
         private final Paint artPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         private final Paint thumbPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private Paint neonP;   // the sung part of a line: a glowing tube
         private Paint titleP, artistP, hintP, lineP, stateP, cmdP, pillP, rowTitleP, rowSubP, sourceP;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint spin = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -604,71 +611,52 @@ public class KaraokeActivity extends Activity {
             spin.setStrokeWidth(5 * k);
             spin.setStrokeCap(Paint.Cap.ROUND);
             spin.setColor(0xFFFFFFFF);
-            veil.setShader(new LinearGradient(0, 0, 0, h, new int[] {0x8C000000, 0x59000000, 0x99000000}, null, Shader.TileMode.CLAMP));
-            float len = h * 1.25f;
-            beamPaint.setShader(new LinearGradient(0, 0, len, 0, 0xFFFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
-            beamPaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
-            beam.reset();
-            beam.moveTo(0, 0);
-            beam.lineTo(len, -len * 0.11f);
-            beam.lineTo(len, len * 0.11f);
-            beam.close();
+            veil.setShader(new LinearGradient(0, 0, 0, h, new int[] {0x99000000, 0x38000000, 0xA6000000}, null, Shader.TileMode.CLAMP));
+            lineP.setShadowLayer(22 * k, 0, 0, 0xB3000000);   // readable over the tunnel
+            neonP = new Paint(lineP);
+            android.graphics.Xfermode screen = new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN);
             for (int i = 0; i < HUES; i++) {
-                hueColors[i] = Color.HSVToColor(new float[] {i * 360f / HUES, 0.75f, 1f});
+                hueColors[i] = Color.HSVToColor(new float[] {i * 360f / HUES, 0.85f, 1f});
                 tints[i] = new android.graphics.PorterDuffColorFilter(hueColors[i], android.graphics.PorterDuff.Mode.SRC_IN);
             }
-            java.util.Random r = new java.util.Random(7);
-            for (int i = 0; i < SPARKS; i++) {
-                sx[i] = r.nextFloat() * w;
-                sy[i] = r.nextFloat() * h;
-                svx[i] = (r.nextFloat() - 0.5f) * 24 * k;
-                svy[i] = -(10 + r.nextFloat() * 28) * k;
-                sr[i] = (2 + r.nextFloat() * 4.5f) * k;
-                sph[i] = r.nextFloat() * 6.28f;
-            }
-            sparkPaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
+            redTint = new android.graphics.PorterDuffColorFilter(0xFFFF1E3C, android.graphics.PorterDuff.Mode.SRC_IN);
             if (disc == null) {
-                disc = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888);
+                disc = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
                 Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-                p.setShader(new RadialGradient(64, 64, 64, new int[] {0xFFFFFFFF, 0xD9FFFFFF, 0xA6FFFFFF, 0x00FFFFFF},
-                        new float[] {0, 0.55f, 0.8f, 1}, Shader.TileMode.CLAMP));
-                new Canvas(disc).drawCircle(64, 64, 64, p);
+                p.setShader(new RadialGradient(32, 32, 32, new int[] {0xFFFFFFFF, 0xFFFFFFFF, 0x80FFFFFF, 0x00FFFFFF},
+                        new float[] {0, 0.25f, 0.45f, 1}, Shader.TileMode.CLAMP));
+                new Canvas(disc).drawCircle(32, 32, 32, p);
             }
-            spritePaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
-            for (int i = 0; i < BOKEH; i++) {
-                bx[i] = r.nextFloat() * w;
-                by[i] = r.nextFloat() * h;
-                br[i] = (50 + r.nextFloat() * 150) * k;
-                bvx[i] = (r.nextFloat() - 0.5f) * 16 * k;
-                bvy[i] = (r.nextFloat() - 0.5f) * 12 * k;
-                bph[i] = r.nextFloat() * 6.28f;
-                bhue[i] = r.nextInt(HUES);
+            int[] wall = {0xFFFFFFFF, 0x99FFFFFF, 0x1FFFFFFF};
+            float[] stops = {0, 0.5f, 1};
+            wallLeft = new RadialGradient(0, 0, 1, wall, stops, Shader.TileMode.CLAMP);
+            wallRight = new RadialGradient(0, 0, 1, wall, stops, Shader.TileMode.CLAMP);
+            for (Paint p : new Paint[] {glow, core}) {
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeJoin(Paint.Join.ROUND);
+                p.setStrokeCap(Paint.Cap.ROUND);
+                p.setXfermode(screen);
             }
-            laserGlow.setStyle(Paint.Style.STROKE);
-            laserGlow.setStrokeWidth(12 * k);
-            laserGlow.setStrokeCap(Paint.Cap.ROUND);
-            laserCore.setStyle(Paint.Style.STROKE);
-            laserCore.setStrokeWidth(2.5f * k);
-            laserGlow.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
-            laserCore.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
-            for (int i = 0; i < DOTS; i++) {
-                dlon[i] = r.nextFloat() * 6.2832f;
-                float lat = (r.nextFloat() - 0.5f) * 2.4f;
-                dcos[i] = (float) Math.cos(lat);
-                dsin[i] = (float) Math.sin(lat);
-                dsize[i] = 0.7f + r.nextFloat() * 0.8f;
-            }
-            dotPaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
-            makeBlobs();
+            tilePaint.setStyle(Paint.Style.STROKE);
+            tilePaint.setStrokeCap(Paint.Cap.SQUARE);
+            tilePaint.setXfermode(screen);
+            spritePaint.setXfermode(screen);
+            for (int i = 0; i < TILES; i++) spawnTile(i, NEAR + rnd.nextFloat() * (FAR - NEAR));
             artShader = null;
+        }
+
+        /** A light on the tunnel's wall, somewhere around it, at depth z. */
+        private void spawnTile(int i, float z) {
+            double a = rnd.nextFloat() * Math.PI * 2;
+            tz[i] = z;
+            tcos[i] = (float) Math.cos(a);
+            tsin[i] = (float) Math.sin(a);
+            trad[i] = 1.3f + rnd.nextFloat() * 1.4f;
         }
 
         void setSong(Bitmap cover) {
             art = cover;
             artShader = null;
-            tiny = cover == null ? null : Bitmap.createScaledBitmap(cover, 24, 24, true);
-            makeBlobs();
-            songAt = SystemClock.uptimeMillis();
             scroll = -1;
             invalidate();
         }
@@ -676,33 +664,6 @@ public class KaraokeActivity extends Activity {
         void lyricsChanged() {
             scroll = -1;
             invalidate();
-        }
-
-        /** Three colors from the art (left, middle, right), brighter and more saturated; violet and pink without it. */
-        private void makeBlobs() {
-            int[] colors = {0xFF6A11CB, 0xFFFC2576, 0xFF2575FC};
-            if (tiny != null) for (int i = 0; i < 3; i++) colors[i] = vivid(average(tiny, i * 8, (i + 1) * 8));
-            float r = 760 * k;
-            for (int i = 0; i < 3; i++) {
-                blobs[i] = new RadialGradient(0, 0, r, Ui.alpha(colors[i], 0.75f), Ui.alpha(colors[i], 0f), Shader.TileMode.CLAMP);
-            }
-        }
-
-        private int average(Bitmap b, int x0, int x1) {
-            long r = 0, g = 0, bl = 0, n = 0;
-            for (int x = x0; x < x1; x++) for (int y = 0; y < b.getHeight(); y++) {
-                int p = b.getPixel(x, y);
-                r += Color.red(p); g += Color.green(p); bl += Color.blue(p); n++;
-            }
-            return n == 0 ? 0xFF6A11CB : Color.rgb((int) (r / n), (int) (g / n), (int) (bl / n));
-        }
-
-        private int vivid(int c) {
-            float[] hsv = new float[3];
-            Color.colorToHSV(c, hsv);
-            hsv[1] = Math.min(1, hsv[1] * 1.4f + 0.15f);
-            hsv[2] = Math.max(0.55f, Math.min(1, hsv[2] * 1.3f));
-            return Color.HSVToColor(hsv);
         }
 
         @Override protected void onDraw(Canvas c) {
@@ -743,132 +704,124 @@ public class KaraokeActivity extends Activity {
         }
 
         private void drawBackground(Canvas c, float t, float dt) {
-            c.drawColor(0xFF0B0B10);
+            c.drawColor(0xFF05030A);
             // The beat: jumps to 1 and fades in ~0.4 s (no beat detection: a slow breathing instead).
             long sinceBeat = SystemClock.uptimeMillis() - beat.beatAt;
             float target = sinceBeat < 2000 ? (float) Math.exp(-sinceBeat / 260f) : 0.25f + 0.25f * (float) Math.sin(t * 1.6f);
             pulse += (target - pulse) * Ui.clamp(dt * 18);
-            float fadeIn = Ui.clamp((SystemClock.uptimeMillis() - songAt) / 900f);
-            if (tiny != null) {
-                bgPaint.setAlpha(Math.round(255 * 0.5f * fadeIn));
-                rect.set(-w * 0.1f, -h * 0.1f, w * 1.1f, h * 1.1f);
-                c.drawBitmap(tiny, null, rect, bgPaint);
+            float speed = 1.1f + 1.3f * pulse;   // depth units per second
+            travel += speed * dt;
+            float f = h * 0.55f;                 // the lens: on screen, size = f / depth
+            // The walls: a pair of colors from the videos every 24 s, crossfading over the last 3.
+            int scene = (int) (t / 24);
+            float mix = Ui.clamp((t - scene * 24 - 21) / 3);
+            int[] now = WALLS[scene % WALLS.length], next = WALLS[(scene + 1) % WALLS.length];
+            float a = 0.55f + 0.2f * pulse;
+            drawWall(c, wallLeft, -w * 0.08f, now[0], a * (1 - mix));
+            drawWall(c, wallRight, w * 1.08f, now[1], a * (1 - mix));
+            if (mix > 0) {
+                drawWall(c, wallLeft, -w * 0.08f, next[0], a * mix);
+                drawWall(c, wallRight, w * 1.08f, next[1], a * mix);
             }
-            for (int i = 0; i < 3; i++) {
-                float ph = i * 2.1f;
-                float x = w * (0.5f + 0.38f * (float) Math.sin(t * (0.11f + 0.03f * i) + ph));
-                float y = h * (0.5f + 0.32f * (float) Math.cos(t * (0.08f + 0.025f * i) + ph * 1.3f));
-                float grow = 1 + 0.12f * pulse;
-                m.setScale(grow, grow);
-                m.postTranslate(x, y);
-                blobs[i].setLocalMatrix(m);
-                blob.setShader(blobs[i]);
-                blob.setAlpha(Math.round(255 * (0.3f + 0.25f * fadeIn + 0.1f * pulse)));
-                c.drawRect(0, 0, w, h, blob);
-            }
-            drawBokeh(c, t, dt);
-            drawBeams(c, t);
-            drawLasers(c, t);
-            drawDots(c, t);
-            drawSparks(c, t, dt);
+            drawTiles(c, t, dt, speed, f);
+            drawRings(c, t, f);
             c.drawRect(0, 0, w, h, veil);
         }
 
-        /** Big out-of-focus lights in party colors, drifting and twinkling, a little bigger on the beat. */
-        private void drawBokeh(Canvas c, float t, float dt) {
-            for (int i = 0; i < BOKEH; i++) {
-                float r = br[i] * (1 + 0.1f * pulse);
-                bx[i] += bvx[i] * dt;
-                by[i] += bvy[i] * dt;
-                if (bx[i] < -r) bx[i] += w + 2 * r; else if (bx[i] > w + r) bx[i] -= w + 2 * r;
-                if (by[i] < -r) by[i] += h + 2 * r; else if (by[i] > h + r) by[i] -= h + 2 * r;
-                float tw = 0.5f + 0.5f * (float) Math.sin(t * 0.8f + bph[i]);
-                spritePaint.setColorFilter(tints[(bhue[i] + (int) (t * 2)) % HUES]);
-                spritePaint.setAlpha(Math.round(255 * Ui.clamp(0.1f + 0.16f * tw + 0.2f * pulse)));
-                rect.set(bx[i] - r, by[i] - r, bx[i] + r, by[i] + r);
-                c.drawBitmap(disc, null, rect, spritePaint);
+        private float cxAt(float z, float t) {   // the tunnel bends gently, more the farther
+            return w / 2 + w * 0.07f * (float) Math.sin(t * 0.37f) * (z / FAR);
+        }
+
+        private float cyAt(float z, float t) {
+            return h / 2 + h * 0.07f * (float) Math.cos(t * 0.29f) * (z / FAR);
+        }
+
+        private void drawWall(Canvas c, RadialGradient g, float x, int hue, float alpha) {
+            if (alpha < 0.01f) return;
+            float r = w * 0.95f * (1 + 0.08f * pulse);
+            m.setScale(r, r);
+            m.postTranslate(x, h / 2);
+            g.setLocalMatrix(m);
+            wallPaint.setShader(g);
+            wallPaint.setColorFilter(tints[hue]);
+            wallPaint.setAlpha(Math.round(255 * alpha));
+            c.drawRect(0, 0, w, h, wallPaint);
+        }
+
+        /** Window-like lights on the walls, streaming past toward the edges of the screen. */
+        private void drawTiles(Canvas c, float t, float dt, float speed, float f) {
+            float tail = 0.06f + 0.18f * pulse;
+            for (int i = 0; i < TILES; i++) {
+                tz[i] -= speed * dt;
+                if (tz[i] < NEAR * 0.6f) spawnTile(i, FAR * (0.8f + 0.2f * rnd.nextFloat()));
+                float z = tz[i], z2 = z + tail;
+                float x1 = cxAt(z, t) + tcos[i] * trad[i] * f / z, y1 = cyAt(z, t) + tsin[i] * trad[i] * f / z;
+                float x2 = cxAt(z2, t) + tcos[i] * trad[i] * f / z2, y2 = cyAt(z2, t) + tsin[i] * trad[i] * f / z2;
+                float fog = Ui.clamp(1 - z / FAR);
+                tilePaint.setColor(i % 3 == 0 ? 0xFFFF9100 : 0xFFFFD600);
+                tilePaint.setAlpha(Math.round(255 * fog * (0.75f + 0.25f * pulse)));
+                tilePaint.setStrokeWidth(Math.max(1.5f * k, 0.045f * f / z));
+                c.drawLine(x1, y1, x2, y2, tilePaint);
             }
         }
 
-        /** A fan of laser lines from above; every 8 s it moves, changes color and pattern; brighter on the beat. */
-        private void drawLasers(Canvas c, float t) {
-            int scene = (int) (t / 8);
-            float st = t - scene * 8;
-            float fade = Ui.clamp(st / 0.8f) * Ui.clamp((8 - st) / 0.8f);
-            int where = scene % 3;
-            float ox = w * (where == 0 ? 0.5f : where == 1 ? 0.1f : 0.9f), oy = -h * 0.03f;
-            float center = where == 0 ? 90 : where == 1 ? 58 : 122;   // degrees, 90 = straight down
-            float spread = 8 + 5 * (float) Math.sin(t * 0.9f);
-            float sway = 20 * (float) Math.sin(t * 0.55f + scene);
-            float a = fade * (0.18f + 0.45f * pulse);
-            if (a < 0.01f) return;
-            int color = LASER_COLORS[scene % LASER_COLORS.length];
-            float len = w * 1.6f;
-            laserGlow.setColor(color);
-            laserGlow.setAlpha(Math.round(255 * a * 0.3f));
-            laserCore.setColor(color);
-            laserCore.setAlpha(Math.round(255 * a));
-            for (int l = 0; l < LASERS; l++) {
-                double ang = Math.toRadians(center + sway + (l - (LASERS - 1) / 2f) * spread);
-                float ex = ox + (float) Math.cos(ang) * len, ey = oy + (float) Math.sin(ang) * len;
-                c.drawLine(ox, oy, ex, ey, laserGlow);
-                c.drawLine(ox, oy, ex, ey, laserCore);
-            }
+        /** Shapes in turn: squares in rainbow colors, then octagons in cyan with red nodes, hexagons, octagons again. */
+        private int sidesOf(int id) {
+            int block = Math.floorMod(id, 200) / 50;
+            return block == 0 ? 4 : block == 2 ? 6 : 8;
         }
 
-        /** A disco ball's reflections: little lights turning across the walls, the ones facing us brighter. */
-        private void drawDots(Canvas c, float t) {
-            float rot = t * 0.32f, radius = w * 0.62f, cy = h * 0.42f;
-            for (int i = 0; i < DOTS; i++) {
-                float lon = dlon[i] + rot;
-                float face = (float) Math.cos(lon);
-                if (face < 0.1f) continue;
-                float x = w / 2 + radius * (float) Math.sin(lon) * dcos[i];
-                float y = cy + radius * 0.55f * dsin[i];
-                dotPaint.setColor(i % 4 == 0 ? hueColors[(i * 7 + (int) (t * 3)) % HUES] : 0xFFFFFFFF);
-                dotPaint.setAlpha(Math.round(255 * Ui.clamp(face * (0.3f + 0.45f * pulse))));
-                c.drawCircle(x, y, (2.5f + 3 * face) * dsize[i] * k, dotPaint);
-            }
-        }
-
-        /** Moving heads: four from the ceiling and two from the floor corners, sweeping, colors drifting. */
-        private void drawBeams(Canvas c, float t) {
-            for (int i = 0; i < BEAMS; i++) {
-                float ox, oy, base, swing;
-                if (i < 4) {
-                    ox = w * (0.14f + 0.24f * i);
-                    oy = -h * 0.05f;
-                    base = 90 + (i - 1.5f) * 12;   // fanned out downwards
-                    swing = 30;
-                } else {
-                    ox = i == 4 ? w * 0.02f : w * 0.98f;
-                    oy = h * 1.04f;
-                    base = i == 4 ? -60 : -120;
-                    swing = 18;
+        /** The rings, from the farthest to the nearest: spiral arms to the next one, the ring itself, its nodes. */
+        private void drawRings(Canvas c, float t, float f) {
+            int first = (int) Math.floor(travel / GAP_Z);
+            float off = travel - first * GAP_Z;
+            for (int i = 0; i <= RINGS; i++) {
+                float z = (i + 1) * GAP_Z - off;
+                int id = first + i + 1;   // the ring's place in the tunnel: it keeps it while it comes closer
+                int sides = sidesOf(id);
+                double turn = id * 0.21 + t * 0.15;   // a twist from ring to ring, plus a slow roll
+                float cx = cxAt(z, t), cy = cyAt(z, t), r = f / z * (1 + 0.04f * pulse);
+                rz[i] = z;
+                rid[i] = id;
+                for (int v = 0; v < sides; v++) {
+                    double a = turn + v * Math.PI * 2 / sides;
+                    rx[i][v] = cx + (float) Math.cos(a) * r;
+                    ry[i][v] = cy + (float) Math.sin(a) * r;
                 }
-                float angle = base + swing * (float) Math.sin(t * (0.35f + 0.07f * i) + i * 1.7f);
-                int hue = (int) ((t * 6 + i * 6) % HUES);
-                beamPaint.setColorFilter(tints[(hue + HUES) % HUES]);
-                beamPaint.setAlpha(Math.round(255 * (0.13f + 0.2f * pulse)));
-                c.save();
-                c.translate(ox, oy);
-                c.rotate(angle);
-                c.drawPath(beam, beamPaint);
-                c.restore();
             }
-        }
-
-        /** Sparkles drifting up, twinkling; brighter on the beat. */
-        private void drawSparks(Canvas c, float t, float dt) {
-            for (int i = 0; i < SPARKS; i++) {
-                sx[i] += svx[i] * dt;
-                sy[i] += svy[i] * dt * (1 + pulse);
-                if (sy[i] < -10 * k) { sy[i] = h + 10 * k; sx[i] = (sx[i] * 7.31f + 97 * k) % w; }
-                if (sx[i] < 0) sx[i] += w; else if (sx[i] > w) sx[i] -= w;
-                float tw = 0.5f + 0.5f * (float) Math.sin(t * 2.3f + sph[i]);
-                sparkPaint.setColor(hueColors[(i * 5 + (int) (t * 4)) % HUES]);
-                sparkPaint.setAlpha(Math.round(255 * Ui.clamp(0.15f + 0.45f * tw + 0.35f * pulse)));
-                c.drawCircle(sx[i], sy[i], sr[i] * (1 + 0.5f * pulse), sparkPaint);
+            for (int i = RINGS; i >= 0; i--) {
+                float z = rz[i];
+                int id = rid[i], sides = sidesOf(id);
+                float a = Ui.clamp(1 - z / FAR) * Ui.clamp((z - NEAR * 0.5f) / NEAR);
+                if (a < 0.01f) continue;
+                boolean neon = sides == 8;
+                int hue = Math.floorMod(id * 2 + (int) (t * 3), HUES);
+                int color = neon ? 0xFF2BD9FF : hueColors[hue];
+                float unit = f / z;
+                core.setColor(color);
+                if (i < RINGS && sidesOf(rid[i + 1]) == sides) {   // spiral arms, toward the farther ring
+                    core.setAlpha(Math.round(255 * a * 0.55f));
+                    core.setStrokeWidth(Math.max(1f * k, 0.008f * unit));
+                    for (int v = 0; v < sides; v++) c.drawLine(rx[i][v], ry[i][v], rx[i + 1][v], ry[i + 1][v], core);
+                }
+                ringPath.reset();
+                ringPath.moveTo(rx[i][0], ry[i][0]);
+                for (int v = 1; v < sides; v++) ringPath.lineTo(rx[i][v], ry[i][v]);
+                ringPath.close();
+                glow.setColor(color);
+                glow.setAlpha(Math.round(255 * Ui.clamp(a * (0.22f + 0.2f * pulse))));
+                glow.setStrokeWidth(Math.max(4 * k, 0.07f * unit));
+                c.drawPath(ringPath, glow);
+                core.setAlpha(Math.round(255 * a));
+                core.setStrokeWidth(Math.max(1.4f * k, 0.016f * unit));
+                c.drawPath(ringPath, core);
+                float nr = Math.max(6 * k, 0.08f * unit) * (1 + 0.35f * pulse);
+                spritePaint.setColorFilter(neon ? redTint : tints[(hue + HUES / 2) % HUES]);
+                spritePaint.setAlpha(Math.round(255 * a));
+                for (int v = 0; v < sides; v++) {
+                    rect.set(rx[i][v] - nr, ry[i][v] - nr, rx[i][v] + nr, ry[i][v] + nr);
+                    c.drawBitmap(disc, null, rect, spritePaint);
+                }
             }
         }
 
@@ -945,7 +898,7 @@ public class KaraokeActivity extends Activity {
                 float alpha = alphaAt(d);
                 if (alpha <= 0.01f) continue;
                 drawLine(c, orNote(lines.get(i).text), cy + d * GAP * k, scaleAt(d), alpha,
-                        i == idx ? p : i < idx ? 1 : 0);
+                        i == idx ? p : i < idx ? 1 : 0, i);
             }
         }
 
@@ -963,10 +916,11 @@ public class KaraokeActivity extends Activity {
         }
 
         /**
-         * One line, centered at y, drawn at SIZE and scaled (shrunk further to fit); `filled` (0..1) of it in full white
-         * over a dimmer copy. Past lines are fully filled and future ones empty, so a line never changes style.
+         * One line, centered at y, drawn at SIZE and scaled (shrunk further to fit); `filled` (0..1) of it lit like a
+         * neon tube (line `n`'s color, the glow swelling on the beat) over a dimmer white copy. Past lines are fully lit
+         * and future ones not, so a line never changes style.
          */
-        private void drawLine(Canvas c, String s, float y, float scale, float alpha, float filled) {
+        private void drawLine(Canvas c, String s, float y, float scale, float alpha, float filled, int n) {
             lineP.setTextSize(SIZE * k);
             float tw = lineP.measureText(s), max = 1720 * k;
             float fit = tw * scale > max ? max / tw : scale;
@@ -976,9 +930,15 @@ public class KaraokeActivity extends Activity {
             lineP.setAlpha(Math.round(255 * 0.42f * alpha));
             c.drawText(s, w / 2, base, lineP);
             if (filled > 0) {
-                c.clipRect(left, base - SIZE * k * 1.2f, left + tw * filled, base + SIZE * k * 0.5f);
-                lineP.setAlpha(Math.round(255 * alpha));
-                c.drawText(s, w / 2, base, lineP);
+                c.clipRect(left - 40 * k, base - SIZE * k * 1.6f, left + tw * filled, base + SIZE * k * 0.9f);
+                int i = n % NEON.length;
+                neonP.setTextSize(SIZE * k);
+                neonP.setColor(NEON_CORE[i]);
+                neonP.setAlpha(Math.round(255 * alpha));
+                neonP.setShadowLayer(26 * k * (1 + 0.5f * pulse), 0, 0, NEON[i]);   // the wide glow
+                c.drawText(s, w / 2, base, neonP);
+                neonP.setShadowLayer(8 * k, 0, 0, NEON[i]);                        // and the bright edge
+                c.drawText(s, w / 2, base, neonP);
             }
             c.restore();
         }
@@ -995,7 +955,7 @@ public class KaraokeActivity extends Activity {
             for (int i = Math.max(0, (int) scroll - 3); i < lines.size() && i <= scroll + 4; i++) {
                 float d = i - scroll;
                 float alpha = alphaAt(d);
-                if (alpha > 0.01f) drawLine(c, lines.get(i), h * 0.56f + d * GAP * k, 0.66f + 0.2f * Ui.clamp(1 - Math.abs(d)), alpha, 1);
+                if (alpha > 0.01f) drawLine(c, lines.get(i), h * 0.56f + d * GAP * k, 0.66f + 0.2f * Ui.clamp(1 - Math.abs(d)), alpha, 1, i);
             }
         }
 
