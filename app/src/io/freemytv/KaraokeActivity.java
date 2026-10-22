@@ -62,7 +62,7 @@ public class KaraokeActivity extends Activity {
     static final String SPOTIFY = "com.spotify.tv.android";
 
     private static final int NO_ACCESS = 0, WAITING = 1, LOADING = 2, NO_LYRICS = 3, INSTRUMENTAL = 4, READY = 5;
-    private static final Map<String, Lyrics> CACHE = new HashMap<>();   // this process's songs, found or not (null)
+    private static final Map<String, Lyrics> CACHE = new HashMap<>();   // this process's songs with synced lyrics
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newFixedThreadPool(2);
@@ -273,11 +273,28 @@ public class KaraokeActivity extends Activity {
             return;
         }
         state = LOADING;
+        findLyrics(key, a, t, album, duration, true);
+    }
+
+    /**
+     * Looks for the lyrics in the background. Only synced (or instrumental) results are remembered: a song that came
+     * back without times (a source slow or down for a moment) is looked up again next time, and once more 15 s later
+     * right now, switching to the synced lyrics if they turn up.
+     */
+    private void findLyrics(final String key, final String a, final String t, final String album, final long duration,
+                            final boolean retry) {
         io.execute(() -> {
             final Lyrics l = Lyrics.find(getFilesDir(), a, t, album, duration);
+            final boolean good = l != null && (l.instrumental || !l.synced.isEmpty());
+            AppLog.w("lyrics: " + t + " → " + (l == null ? "none" : l.source + (l.synced.isEmpty() ? " (no times)" : " (synced)")));
             main.post(() -> {
-                CACHE.put(key, l);
-                if (key.equals(trackKey)) show(l);
+                if (good) CACHE.put(key, l);
+                if (!key.equals(trackKey)) return;
+                if (good || retry || lyrics == null) show(l);
+                if (!good && retry) {
+                    AppLog.w("lyrics: no times for " + t + ", once more in 15 s");
+                    main.postDelayed(() -> { if (key.equals(trackKey) && !hasSynced()) findLyrics(key, a, t, album, duration, false); }, 15_000);
+                }
             });
         });
     }
