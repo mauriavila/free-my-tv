@@ -88,6 +88,7 @@ public class KaraokeActivity extends Activity {
 
     private void openForLyrics() {
         autoAt = 0;
+        holdFrontUntil = 0;
         if (!resumed || syncing || results != null || search.getVisibility() == View.VISIBLE || hasSynced()) return;
         Intent i = getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY);
         if (i == null) return;
@@ -147,6 +148,10 @@ public class KaraokeActivity extends Activity {
     @Override protected void onPause() {
         resumed = false;
         cancelAuto();
+        if (!isFinishing() && SystemClock.uptimeMillis() < holdFrontUntil) {   // Spotify woke up with its screen
+            AppLog.w("karaoke: Spotify came to the front while waking up, taking it back");
+            bringToFront(900);
+        }
         if (isFinishing()) Lights.partyStop(this);
         beat.stop();
         view.stop();
@@ -531,6 +536,8 @@ public class KaraokeActivity extends Activity {
     }
 
     private android.media.browse.MediaBrowser browser;
+    /** Until when (uptime) Spotify waking up may jump in front with its own screen: the karaoke takes the front back. */
+    private long holdFrontUntil;
 
     /**
      * Spotify isn't playing (so it has no session to take the song): wake it up behind the karaoke. First its media
@@ -539,6 +546,7 @@ public class KaraokeActivity extends Activity {
      * session shows up. Only if none of that works in 8 s does Spotify open on the song (and the karaoke come back).
      */
     private void wakeSpotify(final String uri) {
+        holdFrontUntil = SystemClock.uptimeMillis() + 12_000;
         ComponentName service = spotifyService();
         if (service != null) {
             try {
@@ -573,6 +581,7 @@ public class KaraokeActivity extends Activity {
         main.postDelayed(() -> {
             if (!uri.equals(pendingUri)) return;
             pendingUri = null;
+            holdFrontUntil = 0;   // opened on purpose: back when the song starts
             AppLog.w("karaoke: Spotify didn't wake up behind us: opening it on the song");
             if (!openSpotify(new Intent(Intent.ACTION_VIEW, Uri.parse(uri)).setPackage(SPOTIFY))) {
                 openSpotify(getPackageManager().getLeanbackLaunchIntentForPackage(SPOTIFY));
@@ -606,6 +615,7 @@ public class KaraokeActivity extends Activity {
     /** Spotify in front; the karaoke returns as soon as a new song starts there. */
     private boolean openSpotify(Intent i) {
         if (i == null) return false;
+        holdFrontUntil = 0;   // on purpose: Spotify may stay in front
         try {
             returnOnNextSong = true;
             startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
