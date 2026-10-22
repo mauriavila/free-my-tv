@@ -75,14 +75,15 @@ final class Lyrics {
     // MARK: - LRCLIB
 
     /**
-     * Synced lyrics first: the exact match (name, artist, length), then a search by name and artist, then a free-text
+     * Synced lyrics first: the exact match (name, artist, length; get-cached, since plain get goes looking on other
+     * sites and can take long enough to time out), then a search by name and artist, then a free-text
      * search (Spotify's names often differ from LRCLIB's in case, featured artists or the album), keeping the closest
      * in length. Plain lyrics only if none of them is synced.
      */
     private static Lyrics fromLrclib(String a, String t, String album, long durationMs) throws Exception {
         Lyrics plainOnly = null;
         if (durationMs > 0) {
-            String body = get(LRCLIB + "get?artist_name=" + enc(a) + "&track_name=" + enc(t)
+            String body = get(LRCLIB + "get-cached?artist_name=" + enc(a) + "&track_name=" + enc(t)
                     + (album != null && !album.isEmpty() ? "&album_name=" + enc(album) : "")
                     + "&duration=" + Math.round(durationMs / 1000.0), null);
             if (body != null) {
