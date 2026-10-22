@@ -54,6 +54,11 @@ Without it, ▲ opens Spotify's own search instead, and the karaoke comes back w
 
 Remote: ▲ search, ◀ ▶ move the lyrics earlier or later, OK pause, ⏪ ⏩ previous or next song, ▼ Spotify, Back leaves.
 
+Songs with lyrics but no times (only lyrics.ovh had them): ☰ syncs them with the remote. The song starts over and you
+press OK as each line starts (◀ undoes the last one, ▶ finishes early, Back cancels). They're saved on the TV, so the
+song is synced from then on, and published to LRCLIB (its small proof of work runs in the background), so every app
+using LRCLIB gets them too.
+
 The background is a club: out-of-focus colored lights, moving heads from the ceiling, a laser fan, a disco ball's
 dots and sparkles; the lyrics light up like neon tubes as they're sung. It moves on its own; to make them swell on the beat (BeatPulse reads only the
 sound's spectrum, through Android's Visualizer), once: `adb shell pm grant io.freemytv android.permission.RECORD_AUDIO`.

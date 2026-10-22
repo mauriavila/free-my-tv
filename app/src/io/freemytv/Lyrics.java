@@ -19,7 +19,8 @@ import java.util.regex.Pattern;
 /**
  * Song lyrics for the karaoke screen, from three free sources, best first: LRCLIB (lrclib.net, community-made,
  * synced), NetEase Cloud Music (synced lyrics for a large catalog, Latin music included) and lyrics.ovh (text only).
- * Network calls: call from a background thread.
+ * Songs the person synced themselves with the remote (the karaoke's sync mode) come first, from the TV, and can be
+ * published to LRCLIB for everyone. Network calls and files: call from a background thread.
  */
 final class Lyrics {
     /** One line and when it starts (ms from the song's start). */
@@ -46,9 +47,11 @@ final class Lyrics {
     private static final String LRCLIB = "https://lrclib.net/api/";
     private static final Pattern TIME = Pattern.compile("\\[(\\d+):(\\d+)(?:[.:](\\d+))?\\]");
 
-    /** The lyrics for this song, synced if any source has them, else plain; null if none has it. */
-    static Lyrics find(String artist, String title, String album, long durationMs) {
+    /** The lyrics for this song: synced by the person, else synced if any source has them, else plain; null if none. */
+    static Lyrics find(java.io.File dir, String artist, String title, String album, long durationMs) {
         String t = clean(title), a = mainArtist(artist);
+        Lyrics mine = local(dir, artist, title);
+        if (mine != null) return mine;
         AppLog.w("lyrics for: " + a + " · " + t + " · " + durationMs / 1000 + " s");
         Lyrics lrclib = null;
         try {
@@ -72,18 +75,127 @@ final class Lyrics {
         }
     }
 
+    // MARK: - Synced on this TV
+
+    static final String MINE = "♥";   // the source shown for lyrics synced with the remote
+
+    static Lyrics synced(List<Line> lines, List<String> plain) {
+        return new Lyrics(new ArrayList<>(lines), new ArrayList<>(plain), false, MINE);
+    }
+
+    private static java.io.File file(java.io.File dir, String artist, String title) {
+        return new java.io.File(new java.io.File(dir, "lyrics"), Integer.toHexString(key(artist, title).hashCode()) + ".lrc");
+    }
+
+    private static Lyrics local(java.io.File dir, String artist, String title) {
+        java.io.File f = file(dir, artist, title);
+        if (!f.isFile()) return null;
+        try (InputStream in = new java.io.FileInputStream(f)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+            List<Line> lines = parseLrc(out.toString("UTF-8"));
+            List<String> plain = new ArrayList<>();
+            for (Line l : lines) if (!l.text.isEmpty()) plain.add(l.text);
+            return lines.isEmpty() ? null : new Lyrics(lines, plain, false, MINE);
+        } catch (Exception e) {
+            AppLog.w("lyrics: couldn't read " + f + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    static void saveLocal(java.io.File dir, String artist, String title, List<Line> lines) throws Exception {
+        java.io.File f = file(dir, artist, title);
+        f.getParentFile().mkdirs();
+        try (java.io.OutputStream out = new java.io.FileOutputStream(f)) {
+            out.write(("[ar:" + artist + "]\n[ti:" + title + "]\n" + toLrc(lines)).getBytes("UTF-8"));
+        }
+    }
+
+    static String toLrc(List<Line> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (Line l : lines) {
+            long cs = Math.max(0, l.at) / 10;
+            sb.append(String.format(Locale.ROOT, "[%02d:%02d.%02d]", cs / 6000, (cs / 100) % 60, cs % 100)).append(l.text).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Publishes synced lyrics to LRCLIB, so every karaoke (and app) using it gets them. LRCLIB asks for a small proof
+     * of work instead of an account: a SHA-256 of its prefix plus a number, at or below its target (tens of seconds
+     * on a TV, on every core). Returns null when published, else what went wrong.
+     */
+    static String publish(String track, String artist, String album, long durationMs, List<Line> lines) {
+        try {
+            JSONObject challenge = new JSONObject(send(LRCLIB + "request-challenge", null, "", null));
+            String prefix = challenge.getString("prefix");
+            String nonce = solve(prefix, challenge.getString("target"));
+            if (nonce == null) return "proof of work took too long";
+            StringBuilder plain = new StringBuilder();
+            for (Line l : lines) if (!l.text.isEmpty()) plain.append(l.text).append('\n');
+            JSONObject body = new JSONObject()
+                    .put("trackName", track).put("artistName", artist).put("albumName", album)
+                    .put("duration", Math.round(durationMs / 1000.0))
+                    .put("plainLyrics", plain.toString().trim()).put("syncedLyrics", toLrc(lines).trim());
+            send(LRCLIB + "publish", prefix + ":" + nonce, body.toString(), null);
+            return null;
+        } catch (Exception e) {
+            return e.getMessage();
+        }
+    }
+
+    private static String solve(final String prefix, String targetHex) throws Exception {
+        final byte[] target = new byte[32];
+        for (int i = 0; i < 32; i++) target[i] = (byte) Integer.parseInt(targetHex.substring(i * 2, i * 2 + 2), 16);
+        final int threads = Math.max(1, Runtime.getRuntime().availableProcessors());
+        final java.util.concurrent.atomic.AtomicReference<String> found = new java.util.concurrent.atomic.AtomicReference<>();
+        final long deadline = System.currentTimeMillis() + 5 * 60_000;
+        Thread[] all = new Thread[threads];
+        for (int t = 0; t < threads; t++) {
+            final int start = t;
+            all[t] = new Thread(() -> {
+                try {
+                    java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                    byte[] p = prefix.getBytes("US-ASCII"), digits = new byte[20];
+                    for (long n = start; found.get() == null; n += threads) {
+                        if ((n & 0xFFFF) < threads && System.currentTimeMillis() > deadline) return;
+                        int len = 0;
+                        for (long v = n; ; v /= 10) { digits[19 - len++] = (byte) ('0' + v % 10); if (v < 10) break; }
+                        md.update(p);
+                        md.update(digits, 20 - len, len);
+                        if (atMost(md.digest(), target)) found.compareAndSet(null, Long.toString(n));
+                    }
+                } catch (Exception ignored) {
+                }
+            }, "lrclib-pow");
+            all[t].setPriority(Thread.MIN_PRIORITY);   // the karaoke keeps drawing smoothly
+            all[t].start();
+        }
+        for (Thread t : all) t.join();
+        return found.get();
+    }
+
+    private static boolean atMost(byte[] hash, byte[] target) {
+        for (int i = 0; i < hash.length; i++) {
+            int h = hash[i] & 0xFF, t = target[i] & 0xFF;
+            if (h > t) return false;
+            if (h < t) return true;
+        }
+        return true;
+    }
+
     // MARK: - LRCLIB
 
     /**
-     * Synced lyrics first: the exact match (name, artist, length; get-cached, since plain get goes looking on other
-     * sites and can take long enough to time out), then a search by name and artist, then a free-text
+     * Synced lyrics first: the exact match (name, artist, length), then a search by name and artist, then a free-text
      * search (Spotify's names often differ from LRCLIB's in case, featured artists or the album), keeping the closest
      * in length. Plain lyrics only if none of them is synced.
      */
     private static Lyrics fromLrclib(String a, String t, String album, long durationMs) throws Exception {
         Lyrics plainOnly = null;
         if (durationMs > 0) {
-            String body = get(LRCLIB + "get-cached?artist_name=" + enc(a) + "&track_name=" + enc(t)
+            String body = get(LRCLIB + "get?artist_name=" + enc(a) + "&track_name=" + enc(t)
                     + (album != null && !album.isEmpty() ? "&album_name=" + enc(album) : "")
                     + "&duration=" + Math.round(durationMs / 1000.0), null);
             if (body != null) {
@@ -246,6 +358,32 @@ final class Lyrics {
             AppLog.w("lyrics: " + e.getMessage() + ", once more");
             Thread.sleep(1500);
             return fetch(url, referer);
+        }
+    }
+
+    /** A POST with a JSON body (and LRCLIB's publish token, if any); the response body, or an error with LRCLIB's message. */
+    private static String send(String url, String token, String body, String referer) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(10_000);
+        c.setReadTimeout(30_000);
+        c.setRequestMethod("POST");
+        c.setDoOutput(true);
+        c.setRequestProperty("User-Agent", "FreeMyTV karaoke (github.com/simbasjungles/free-my-tv)");
+        c.setRequestProperty("Content-Type", "application/json");
+        if (token != null) c.setRequestProperty("X-Publish-Token", token);
+        try {
+            try (java.io.OutputStream out = c.getOutputStream()) { out.write(body.getBytes("UTF-8")); }
+            int code = c.getResponseCode();
+            InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            if (in != null) {
+                try { byte[] buf = new byte[8192]; for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n); } finally { in.close(); }
+            }
+            String text = out.toString("UTF-8");
+            if (code >= 400) throw new java.io.IOException("HTTP " + code + " " + text);
+            return text;
+        } finally {
+            c.disconnect();
         }
     }
 

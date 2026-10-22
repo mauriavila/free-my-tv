@@ -77,6 +77,14 @@ public class KaraokeActivity extends Activity {
     private long offsetMs, offsetShownAt = -10_000;
     private boolean resumed, returnOnNextSong;
     private String pendingUri;           // a song to play as soon as Spotify's session shows up
+    private String album = "";
+    private long durationMs;
+
+    // Sync mode (☰ on songs with lyrics but no times): the song starts over and OK marks when each line begins.
+    private boolean syncing;
+    private final List<String> syncText = new ArrayList<>();
+    private final List<Lyrics.Line> syncDone = new ArrayList<>();
+    private static final long REACTION_MS = 180;   // people press a little after the line starts
 
     // Search and the song list
     private EditText search;
@@ -221,6 +229,8 @@ public class KaraokeActivity extends Activity {
         boolean same = key.equals(trackKey);
         title = t;
         artist = a;
+        KaraokeActivity.this.album = album;
+        durationMs = duration;
         if (!same || (art != null && art != view.art)) view.setSong(art);
         if (art == null) {
             final String uri = text(m, MediaMetadata.METADATA_KEY_ALBUM_ART_URI, MediaMetadata.METADATA_KEY_ART_URI);
@@ -230,6 +240,7 @@ public class KaraokeActivity extends Activity {
             });
         }
         if (same) return;
+        if (syncing) { syncing = false; toast(Ui.tr("A música mudou: sincronização cancelada", "The song changed: sync cancelled", "Cambió la canción: sincronización cancelada")); }
         trackKey = key;
         offsetMs = 0;
         lyrics = null;
@@ -240,7 +251,7 @@ public class KaraokeActivity extends Activity {
         }
         state = LOADING;
         io.execute(() -> {
-            final Lyrics l = Lyrics.find(a, t, album, duration);
+            final Lyrics l = Lyrics.find(getFilesDir(), a, t, album, duration);
             main.post(() -> {
                 CACHE.put(key, l);
                 if (key.equals(trackKey)) show(l);
@@ -252,6 +263,62 @@ public class KaraokeActivity extends Activity {
         lyrics = l;
         state = l == null || !l.any() ? (l != null && l.instrumental ? INSTRUMENTAL : NO_LYRICS) : READY;
         view.lyricsChanged();
+    }
+
+    // MARK: - Sync with the remote
+
+    private boolean canSync() {
+        return state == READY && lyrics != null && lyrics.synced.isEmpty() && !lyrics.plain.isEmpty() && controller != null;
+    }
+
+    private void startSync() {
+        syncText.clear();
+        syncText.addAll(lyrics.plain);
+        syncDone.clear();
+        offsetMs = 0;
+        syncing = true;
+        MediaController.TransportControls tc = controller.getTransportControls();
+        tc.seekTo(0);
+        tc.play();
+        view.lyricsChanged();
+    }
+
+    /** OK: the next line starts now. */
+    private void markLine() {
+        long at = Math.max(0, position() - REACTION_MS);
+        syncDone.add(new Lyrics.Line(at, syncText.get(syncDone.size())));
+        if (syncDone.size() == syncText.size()) finishSync();
+    }
+
+    private void finishSync() {
+        syncing = false;
+        final List<Lyrics.Line> lines = new ArrayList<>(syncDone);
+        final Lyrics l = Lyrics.synced(lines, syncText);
+        final String key = trackKey, a = artist, t = title, al = album;
+        final long d = durationMs;
+        CACHE.put(key, l);
+        show(l);
+        io.execute(() -> {
+            try {
+                Lyrics.saveLocal(getFilesDir(), a, t, lines);
+            } catch (Exception e) {
+                AppLog.w("sync: couldn't save: " + e.getMessage());
+            }
+            if (al.isEmpty() || d <= 0) {
+                main.post(() -> toast(Ui.tr("Letra salva nesta TV", "Lyrics saved on this TV", "Letra guardada en esta tele")));
+                return;
+            }
+            main.post(() -> toast(Ui.tr("Letra salva · enviando ao LRCLIB…", "Lyrics saved · sending to LRCLIB…", "Letra guardada · subiendo a LRCLIB…")));
+            String error = Lyrics.publish(t, a, al, d, lines);
+            AppLog.w("sync: LRCLIB " + (error == null ? "published" : error));
+            main.post(() -> toast(error == null ? Ui.tr("Publicada no LRCLIB ✓", "Published on LRCLIB ✓", "Publicada en LRCLIB ✓")
+                    : Ui.tr("Não deu para enviar ao LRCLIB (fica salva nesta TV)", "Couldn't send it to LRCLIB (it stays on this TV)",
+                    "No se pudo subir a LRCLIB (queda guardada en esta tele)")));
+        });
+    }
+
+    private void toast(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show();
     }
 
     private static String text(MediaMetadata m, String key, String fallback) {
@@ -532,6 +599,37 @@ public class KaraokeActivity extends Activity {
                 default:
                     return true;
             }
+        }
+        if (syncing) {
+            if (code == KeyEvent.KEYCODE_HOME) return super.dispatchKeyEvent(e);
+            if (!first) return true;
+            switch (code) {
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                    markLine();
+                    break;
+                case KeyEvent.KEYCODE_DPAD_LEFT:   // undo the last mark
+                    if (!syncDone.isEmpty()) syncDone.remove(syncDone.size() - 1);
+                    break;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:  // done early (the rest has no lines left to mark, or an outro)
+                    if (!syncDone.isEmpty()) { syncText.subList(syncDone.size(), syncText.size()).clear(); finishSync(); }
+                    break;
+                case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                    if (controller != null) { if (playing()) controller.getTransportControls().pause(); else controller.getTransportControls().play(); }
+                    break;
+                case KeyEvent.KEYCODE_BACK:
+                case KeyEvent.KEYCODE_MENU:
+                    syncing = false;
+                    view.lyricsChanged();
+                    break;
+                default:
+                    break;
+            }
+            return true;
+        }
+        if (code == KeyEvent.KEYCODE_MENU && canSync()) {
+            if (first) startSync();
+            return true;
         }
         if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_HOME) return super.dispatchKeyEvent(e);
         if (!down) return isOurs(code) || super.dispatchKeyEvent(e);
@@ -827,7 +925,8 @@ public class KaraokeActivity extends Activity {
                     drawState(c, "♪  Instrumental  ♪", null);
                     break;
                 default:
-                    if (lyrics != null && !lyrics.synced.isEmpty()) drawSynced(c, dt); else drawPlain(c, dt);
+                    if (syncing) drawSync(c, dt);
+                    else if (lyrics != null && !lyrics.synced.isEmpty()) drawSynced(c, dt); else drawPlain(c, dt);
                     if (lyrics != null) c.drawText(Ui.tr("Letra: ", "Lyrics: ", "Letra: ") + lyrics.source, w - 80 * k, h - 50 * k, sourceP);
             }
             drawOffset(c);
@@ -1079,6 +1178,23 @@ public class KaraokeActivity extends Activity {
             c.restore();
         }
 
+        /** Sync mode: the line to mark lit in the middle, the marked ones going up, the hint and the count above. */
+        private void drawSync(Canvas c, float dt) {
+            int next = syncDone.size();
+            if (scroll < 0) scroll = next;
+            scroll += (next - scroll) * (1 - (float) Math.exp(-dt * 9f));
+            c.drawText(Ui.tr("OK quando começar cada linha · ◀ desfazer · ▶ terminar · Voltar cancelar",
+                    "OK as each line starts · ◀ undo · ▶ finish · Back cancel",
+                    "OK cuando empieza cada línea · ◀ deshacer · ▶ terminar · Atrás cancelar"), w / 2, h * 0.26f, cmdP);
+            c.drawText(next + " / " + syncText.size(), w / 2, h * 0.26f + 46 * k, cmdP);
+            float cy = h * 0.56f;
+            for (int i = Math.max(0, next - 3); i < syncText.size() && i <= next + 4; i++) {
+                float d = i - scroll;
+                float alpha = alphaAt(d);
+                if (alpha > 0.01f) drawLine(c, syncText.get(i), cy + d * GAP * k, scaleAt(d), alpha, i <= next ? 1 : 0, i);
+            }
+        }
+
         /** Not synced: the plain lyrics, gliding with the song's progress. */
         private void drawPlain(Canvas c, float dt) {
             List<String> lines = lyrics.plain;
@@ -1087,7 +1203,8 @@ public class KaraokeActivity extends Activity {
             float target = duration <= 0 ? 0 : Ui.clamp(position() / (float) duration) * Math.max(0, lines.size() - 1);
             if (scroll < 0) scroll = target;
             scroll += (target - scroll) * (1 - (float) Math.exp(-dt * 3f));
-            c.drawText(Ui.tr("Letra sem sincronizar", "Lyrics not synced", "Letra sin sincronizar"), w / 2, h * 0.26f, cmdP);
+            c.drawText(Ui.tr("Letra sem sincronizar · ☰ sincronizar com o controle", "Lyrics not synced · ☰ sync it with the remote",
+                    "Letra sin sincronizar · ☰ sincronizala con el control"), w / 2, h * 0.26f, cmdP);
             for (int i = Math.max(0, (int) scroll - 3); i < lines.size() && i <= scroll + 4; i++) {
                 float d = i - scroll;
                 float alpha = alphaAt(d);
