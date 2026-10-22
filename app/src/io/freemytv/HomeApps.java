@@ -66,6 +66,8 @@ final class HomeApps {
     static final int VPN = 10;
     /** Fire TV: the karaoke screen (KaraokeActivity). */
     static final int KARAOKE = 11;
+    /** Fire TV: the room's smart lights (Lights): the menu, and movie mode in one press. */
+    static final int LIGHTS = 12, MOVIE = 13;
     /** Image size of each card (16:9; on screen it shows up to ~330 px wide). */
     static final int TILE_W = 384, TILE_H = 216;
 
@@ -237,6 +239,10 @@ final class HomeApps {
     static List<Item> drawerShortcuts(Context c) {
         List<Item> items = new ArrayList<>();
         if (Ui.FIRE) items.add(shortcut(KARAOKE, "karaoke", Ui.tr("Karaokê", "Karaoke", "Karaoke"), "mic"));
+        if (Ui.FIRE && Lights.configured(c)) {
+            items.add(shortcut(LIGHTS, "lights", Ui.tr("Luzes", "Lights", "Luces"), "lightbulb"));
+            items.add(shortcut(MOVIE, "movie", Ui.tr("Cinema", "Movie", "Película"), "movie"));
+        }
         if (QuickVpn.supported(c)) items.add(shortcut(VPN, "vpn", "VPN", "vpn_lock"));
         if (BtSpeaker.supported()) items.add(shortcut(BT_SPEAKER, "speaker", Ui.tr("Caixa de som", "Speaker"), "speaker"));
         items.add(shortcut(ALL_APPS, "all", Ui.tr("Todos os Apps", "All Apps"), "apps"));

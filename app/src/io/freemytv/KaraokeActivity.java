@@ -103,6 +103,7 @@ public class KaraokeActivity extends Activity {
         setContentView(root);
         getWindow().setBackgroundDrawable(null);
         connect();   // followed from creation to the end, also from behind
+        Lights.partyStart(this);   // the room's lights too, until the karaoke closes
     }
 
     @Override protected void onResume() {
@@ -115,12 +116,14 @@ public class KaraokeActivity extends Activity {
 
     @Override protected void onPause() {
         resumed = false;
+        if (isFinishing()) Lights.partyStop(this);
         beat.stop();
         view.stop();
         super.onPause();
     }
 
     @Override protected void onDestroy() {
+        Lights.partyStop(this);
         disconnect();
         io.shutdownNow();
         super.onDestroy();
@@ -503,6 +506,8 @@ public class KaraokeActivity extends Activity {
 
     // MARK: - The screen
 
+    private static final int[] LASER_COLORS = {0xFF39FF14, 0xFFFF1F5A, 0xFF00E5FF, 0xFFD500F9};   // green, red, cyan, violet
+
     private final class KaraokeView extends View implements Choreographer.FrameCallback {
         private boolean running;
         private float k = 1, w = 1920, h = 1080;
@@ -518,9 +523,18 @@ public class KaraokeActivity extends Activity {
         private final Matrix m = new Matrix();
         private final Paint veil = new Paint();
 
-        // Party: stage beams sweeping from below, slowly changing color, and drifting sparkles; with BeatPulse they
-        // swell on the beat. Soft changes only: no strobe or full-screen flashes.
-        private static final int BEAMS = 4, SPARKS = 42, HUES = 36;
+        // Party, like a club: out-of-focus colored lights (bokeh), moving heads sweeping from the ceiling, a laser fan,
+        // a disco ball's dots crossing the walls and drifting sparkles; with BeatPulse they swell on the beat. Soft
+        // changes only: no strobe or full-screen flashes.
+        private static final int BEAMS = 6, SPARKS = 42, HUES = 36, BOKEH = 22, LASERS = 9, DOTS = 72;
+        private Bitmap disc;   // the soft disc every bokeh light is drawn from
+        private final Paint spritePaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        private final Paint laserGlow = new Paint(Paint.ANTI_ALIAS_FLAG), laserCore = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float[] bx = new float[BOKEH], by = new float[BOKEH], br = new float[BOKEH], bvx = new float[BOKEH],
+                bvy = new float[BOKEH], bph = new float[BOKEH];
+        private final int[] bhue = new int[BOKEH];
+        private final float[] dlon = new float[DOTS], dcos = new float[DOTS], dsin = new float[DOTS], dsize = new float[DOTS];
         private final Paint beamPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint sparkPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final android.graphics.Path beam = new android.graphics.Path();
@@ -613,6 +627,38 @@ public class KaraokeActivity extends Activity {
                 sph[i] = r.nextFloat() * 6.28f;
             }
             sparkPaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
+            if (disc == null) {
+                disc = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888);
+                Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                p.setShader(new RadialGradient(64, 64, 64, new int[] {0xFFFFFFFF, 0xD9FFFFFF, 0xA6FFFFFF, 0x00FFFFFF},
+                        new float[] {0, 0.55f, 0.8f, 1}, Shader.TileMode.CLAMP));
+                new Canvas(disc).drawCircle(64, 64, 64, p);
+            }
+            spritePaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
+            for (int i = 0; i < BOKEH; i++) {
+                bx[i] = r.nextFloat() * w;
+                by[i] = r.nextFloat() * h;
+                br[i] = (50 + r.nextFloat() * 150) * k;
+                bvx[i] = (r.nextFloat() - 0.5f) * 16 * k;
+                bvy[i] = (r.nextFloat() - 0.5f) * 12 * k;
+                bph[i] = r.nextFloat() * 6.28f;
+                bhue[i] = r.nextInt(HUES);
+            }
+            laserGlow.setStyle(Paint.Style.STROKE);
+            laserGlow.setStrokeWidth(12 * k);
+            laserGlow.setStrokeCap(Paint.Cap.ROUND);
+            laserCore.setStyle(Paint.Style.STROKE);
+            laserCore.setStrokeWidth(2.5f * k);
+            laserGlow.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
+            laserCore.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
+            for (int i = 0; i < DOTS; i++) {
+                dlon[i] = r.nextFloat() * 6.2832f;
+                float lat = (r.nextFloat() - 0.5f) * 2.4f;
+                dcos[i] = (float) Math.cos(lat);
+                dsin[i] = (float) Math.sin(lat);
+                dsize[i] = 0.7f + r.nextFloat() * 0.8f;
+            }
+            dotPaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
             makeBlobs();
             artShader = null;
         }
@@ -717,23 +763,93 @@ public class KaraokeActivity extends Activity {
                 m.postTranslate(x, y);
                 blobs[i].setLocalMatrix(m);
                 blob.setShader(blobs[i]);
-                blob.setAlpha(Math.round(255 * (0.5f + 0.4f * fadeIn + 0.1f * pulse)));
+                blob.setAlpha(Math.round(255 * (0.3f + 0.25f * fadeIn + 0.1f * pulse)));
                 c.drawRect(0, 0, w, h, blob);
             }
+            drawBokeh(c, t, dt);
             drawBeams(c, t);
+            drawLasers(c, t);
+            drawDots(c, t);
             drawSparks(c, t, dt);
             c.drawRect(0, 0, w, h, veil);
         }
 
-        /** Four stage lights from below, sweeping slowly, each a color that drifts around the color wheel. */
+        /** Big out-of-focus lights in party colors, drifting and twinkling, a little bigger on the beat. */
+        private void drawBokeh(Canvas c, float t, float dt) {
+            for (int i = 0; i < BOKEH; i++) {
+                float r = br[i] * (1 + 0.1f * pulse);
+                bx[i] += bvx[i] * dt;
+                by[i] += bvy[i] * dt;
+                if (bx[i] < -r) bx[i] += w + 2 * r; else if (bx[i] > w + r) bx[i] -= w + 2 * r;
+                if (by[i] < -r) by[i] += h + 2 * r; else if (by[i] > h + r) by[i] -= h + 2 * r;
+                float tw = 0.5f + 0.5f * (float) Math.sin(t * 0.8f + bph[i]);
+                spritePaint.setColorFilter(tints[(bhue[i] + (int) (t * 2)) % HUES]);
+                spritePaint.setAlpha(Math.round(255 * Ui.clamp(0.1f + 0.16f * tw + 0.2f * pulse)));
+                rect.set(bx[i] - r, by[i] - r, bx[i] + r, by[i] + r);
+                c.drawBitmap(disc, null, rect, spritePaint);
+            }
+        }
+
+        /** A fan of laser lines from above; every 8 s it moves, changes color and pattern; brighter on the beat. */
+        private void drawLasers(Canvas c, float t) {
+            int scene = (int) (t / 8);
+            float st = t - scene * 8;
+            float fade = Ui.clamp(st / 0.8f) * Ui.clamp((8 - st) / 0.8f);
+            int where = scene % 3;
+            float ox = w * (where == 0 ? 0.5f : where == 1 ? 0.1f : 0.9f), oy = -h * 0.03f;
+            float center = where == 0 ? 90 : where == 1 ? 58 : 122;   // degrees, 90 = straight down
+            float spread = 8 + 5 * (float) Math.sin(t * 0.9f);
+            float sway = 20 * (float) Math.sin(t * 0.55f + scene);
+            float a = fade * (0.18f + 0.45f * pulse);
+            if (a < 0.01f) return;
+            int color = LASER_COLORS[scene % LASER_COLORS.length];
+            float len = w * 1.6f;
+            laserGlow.setColor(color);
+            laserGlow.setAlpha(Math.round(255 * a * 0.3f));
+            laserCore.setColor(color);
+            laserCore.setAlpha(Math.round(255 * a));
+            for (int l = 0; l < LASERS; l++) {
+                double ang = Math.toRadians(center + sway + (l - (LASERS - 1) / 2f) * spread);
+                float ex = ox + (float) Math.cos(ang) * len, ey = oy + (float) Math.sin(ang) * len;
+                c.drawLine(ox, oy, ex, ey, laserGlow);
+                c.drawLine(ox, oy, ex, ey, laserCore);
+            }
+        }
+
+        /** A disco ball's reflections: little lights turning across the walls, the ones facing us brighter. */
+        private void drawDots(Canvas c, float t) {
+            float rot = t * 0.32f, radius = w * 0.62f, cy = h * 0.42f;
+            for (int i = 0; i < DOTS; i++) {
+                float lon = dlon[i] + rot;
+                float face = (float) Math.cos(lon);
+                if (face < 0.1f) continue;
+                float x = w / 2 + radius * (float) Math.sin(lon) * dcos[i];
+                float y = cy + radius * 0.55f * dsin[i];
+                dotPaint.setColor(i % 4 == 0 ? hueColors[(i * 7 + (int) (t * 3)) % HUES] : 0xFFFFFFFF);
+                dotPaint.setAlpha(Math.round(255 * Ui.clamp(face * (0.3f + 0.45f * pulse))));
+                c.drawCircle(x, y, (2.5f + 3 * face) * dsize[i] * k, dotPaint);
+            }
+        }
+
+        /** Moving heads: four from the ceiling and two from the floor corners, sweeping, colors drifting. */
         private void drawBeams(Canvas c, float t) {
             for (int i = 0; i < BEAMS; i++) {
-                float ox = w * (0.08f + 0.28f * i), oy = h * 1.04f;
-                float base = -90 + (i - 1.5f) * 14;                          // fanned out upwards
-                float angle = base + 24 * (float) Math.sin(t * (0.35f + 0.07f * i) + i * 1.7f);
-                int hue = (int) ((t * 6 + i * 9) % HUES);
+                float ox, oy, base, swing;
+                if (i < 4) {
+                    ox = w * (0.14f + 0.24f * i);
+                    oy = -h * 0.05f;
+                    base = 90 + (i - 1.5f) * 12;   // fanned out downwards
+                    swing = 30;
+                } else {
+                    ox = i == 4 ? w * 0.02f : w * 0.98f;
+                    oy = h * 1.04f;
+                    base = i == 4 ? -60 : -120;
+                    swing = 18;
+                }
+                float angle = base + swing * (float) Math.sin(t * (0.35f + 0.07f * i) + i * 1.7f);
+                int hue = (int) ((t * 6 + i * 6) % HUES);
                 beamPaint.setColorFilter(tints[(hue + HUES) % HUES]);
-                beamPaint.setAlpha(Math.round(255 * (0.16f + 0.2f * pulse)));
+                beamPaint.setAlpha(Math.round(255 * (0.13f + 0.2f * pulse)));
                 c.save();
                 c.translate(ox, oy);
                 c.rotate(angle);

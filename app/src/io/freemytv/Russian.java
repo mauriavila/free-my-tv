@@ -25,6 +25,17 @@ final class Russian {
             case "Connecting to ": return "Подключение к ";
             case "Turning Bluetooth on… press again in a moment": return "Включаю Bluetooth… нажмите ещё раз через секунду";
             case "No paired speaker. Pair it in TV Settings › Bluetooth.": return "Нет сопряжённой колонки. Подключите её в Настройках ТВ › Bluetooth.";
+            case "Lights": return "Свет";
+            case "Lights: ": return "Свет: ";
+            case "Movie": return "Кино";
+            case "Turn on": return "Включить";
+            case "Turn off": return "Выключить";
+            case "Movie mode": return "Режим кино";
+            case "Warm light": return "Тёплый свет";
+            case "Cool light": return "Холодный свет";
+            case "Party": return "Вечеринка";
+            case "no lights in the Tuya cloud": return "в облаке Tuya нет ламп";
+            case "Missing the Tuya key: tuya_key.txt (see the README)": return "Нет ключа Tuya: tuya_key.txt (см. README)";
             case "Fire TV Home": return "Главная Fire TV";
             case "All Apps": return "Приложения";
             case "Settings": return "Настройки";

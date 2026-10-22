@@ -2185,6 +2185,15 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             if (getContext() instanceof android.app.Activity) QuickVpn.open((android.app.Activity) getContext());
             return;
         }
+        if (it.kind == HomeApps.LIGHTS) {
+            if (getContext() instanceof android.app.Activity) Lights.open((android.app.Activity) getContext());
+            return;
+        }
+        if (it.kind == HomeApps.MOVIE) {
+            Lights.movie(getContext());
+            android.widget.Toast.makeText(getContext(), Ui.tr("Modo cinema", "Movie mode", "Modo película"), android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (it.kind == HomeApps.BT_SPEAKER) {
             if (getContext() instanceof android.app.Activity) BtSpeaker.open((android.app.Activity) getContext());
             return;

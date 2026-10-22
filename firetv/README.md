@@ -54,14 +54,31 @@ Without it, ▲ opens Spotify's own search instead, and the karaoke comes back w
 
 Remote: ▲ search, ◀ ▶ move the lyrics earlier or later, OK pause, ⏪ ⏩ previous or next song, ▼ Spotify, Back leaves.
 
-Party lights (stage beams and sparkles) move on their own; to make them swell on the beat (BeatPulse reads only the
+The background is a club: out-of-focus colored lights, moving heads from the ceiling, a laser fan, a disco ball's
+dots and sparkles. They move on their own; to make them swell on the beat (BeatPulse reads only the
 sound's spectrum, through Android's Visualizer), once: `adb shell pm grant io.freemytv android.permission.RECORD_AUDIO`.
+
+## Smart lights (Tuya, LEDVANCE SMART+ WiFi, Smart Life)
+
+The drawer gets **Lights** (on, off, movie mode, warm, cool, party) and **Movie** (low warm light in one press), and the
+karaoke turns them into a party while it's open, then puts each bulb back exactly as it was.
+
+Once: a free cloud project at platform.tuya.com (data center of your Smart Life account, e.g. Western America), your
+Smart Life / LEDVANCE account linked under Devices › Link App Account, then the project's Access ID and Secret on the
+stick, one line `ACCESS_ID:ACCESS_SECRET` (add `:eu` or another region if the project isn't in Western America):
+
+```
+adb push tuya_key.txt /sdcard/Android/data/io.freemytv/files/tuya_key.txt
+```
+
+Then open Free My TV again. Tuya's free plan allows about 26,000 calls a month, so the party is a color program each
+bulb runs by itself (the screen follows the beat; the bulbs, their own rhythm): about a dozen calls per karaoke.
 
 ## What changes on Fire TV
 
 - The app's icon opens the home screen; Settings is the round button at the top right.
 - The top buttons are All Apps and **Fire TV Home** (Amazon's home), instead of Live TV and HDMI inputs.
-- Prime Video, YouTube, Paramount+ (Latin America) and Crunchyroll use their Fire TV packages on the shelf and in the picks.
-- The drawer (↓ from the shelf) adds **VPN** (NordVPN's quick connect, `nordvpn://connect`) and **Speaker** (connects
+- Prime Video, YouTube, Paramount+ (Latin America) and Apple TV use their Fire TV packages; Xuper TV is on the shelf.
+- The drawer (↓ from the shelf) adds **Karaoke**, **Lights** and **Movie** (with a Tuya key), **VPN** (NordVPN's quick connect, `nordvpn://connect`) and **Speaker** (connects
   a paired Bluetooth speaker; with several, a list to pick from).
 - No Free My TV mode, debloat, ADB or screensaver switch: `HomeMode` does nothing on Amazon devices (`Ui.FIRE`).

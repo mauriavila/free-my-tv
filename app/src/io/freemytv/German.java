@@ -18,6 +18,17 @@ final class German {
             case "Connecting to ": return "Verbinde mit ";
             case "Turning Bluetooth on… press again in a moment": return "Bluetooth wird eingeschaltet… gleich noch einmal drücken";
             case "No paired speaker. Pair it in TV Settings › Bluetooth.": return "Kein gekoppelter Lautsprecher. Koppeln unter TV-Einstellungen › Bluetooth.";
+            case "Lights": return "Licht";
+            case "Lights: ": return "Licht: ";
+            case "Movie": return "Kino";
+            case "Turn on": return "Einschalten";
+            case "Turn off": return "Ausschalten";
+            case "Movie mode": return "Kinomodus";
+            case "Warm light": return "Warmes Licht";
+            case "Cool light": return "Kühles Licht";
+            case "Party": return "Party";
+            case "no lights in the Tuya cloud": return "keine Lampen in der Tuya-Cloud";
+            case "Missing the Tuya key: tuya_key.txt (see the README)": return "Tuya-Schlüssel fehlt: tuya_key.txt (siehe README)";
             case "Fire TV Home": return "Fire TV-Startseite";
             case "All Apps": return "Alle Apps";
             case "Settings": return "Einstellungen";
