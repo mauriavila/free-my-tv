@@ -39,7 +39,7 @@ public class FireWake extends Service {
         if (!Ui.FIRE) return;
         start(c);
         final Context app = c.getApplicationContext();
-        new Handler(Looper.getMainLooper()).postDelayed(() -> openIfAmazonHome(app, true), 20_000);
+        new Handler(Looper.getMainLooper()).postDelayed(() -> openIfAmazonHome(app, true, false), 20_000);
     }
 
     @Override public void onCreate() {
@@ -55,10 +55,12 @@ public class FireWake extends Service {
                 AppLog.w("fire wake: " + action);
                 main.removeCallbacksAndMessages(null);
                 // Moments for Fire OS to bring its home screen back to the front first.
-                for (long delay : new long[] {1500, 4000, 8000}) {
+                long[] delays = {1500, 4000, 8000};
+                for (int i = 0; i < delays.length; i++) {
+                    final boolean last = i == delays.length - 1;
                     main.postDelayed(() -> {
-                        if (openIfAmazonHome(getApplicationContext(), wokeUp)) main.removeCallbacksAndMessages(null);
-                    }, delay);
+                        if (openIfAmazonHome(getApplicationContext(), wokeUp, last && wokeUp)) main.removeCallbacksAndMessages(null);
+                    }, delays[i]);
                 }
             }
         };
@@ -84,13 +86,15 @@ public class FireWake extends Service {
 
     /**
      * Opens the home screen if Amazon's is in front (or, without usage access, only right after waking up); true if
-     * opened. Free My TV "in front" right after waking can be a stale record from before the sleep, so the later looks
-     * still happen.
+     * opened. Free My TV "in front" right after waking is often a stale record from before the sleep (Fire OS doesn't
+     * always record its home coming back), so on the last look after waking it opens then too: if Free My TV really
+     * is in front, opening it again changes nothing (single task).
      */
-    static boolean openIfAmazonHome(Context c, boolean wokeUp) {
+    static boolean openIfAmazonHome(Context c, boolean wokeUp, boolean oursCounts) {
         String front = foreground(c);
         AppLog.w("fire wake: in front: " + front);
-        if (front == null ? !wokeUp : !AMAZON_HOME.equals(front)) return false;
+        boolean ours = c.getPackageName().equals(front);
+        if (!(ours && oursCounts) && (front == null ? !wokeUp : !AMAZON_HOME.equals(front))) return false;
         try {
             c.startActivity(new Intent(c, HomeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             AppLog.w("fire wake: opened over Amazon's home");
