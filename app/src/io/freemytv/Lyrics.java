@@ -49,6 +49,7 @@ final class Lyrics {
     /** The lyrics for this song, synced if any source has them, else plain; null if none has it. */
     static Lyrics find(String artist, String title, String album, long durationMs) {
         String t = clean(title), a = mainArtist(artist);
+        AppLog.w("lyrics for: " + a + " · " + t + " · " + durationMs / 1000 + " s");
         Lyrics lrclib = null;
         try {
             lrclib = fromLrclib(a, t, album, durationMs);
@@ -73,29 +74,57 @@ final class Lyrics {
 
     // MARK: - LRCLIB
 
+    /**
+     * Synced lyrics first: the exact match (name, artist, length), then a search by name and artist, then a free-text
+     * search (Spotify's names often differ from LRCLIB's in case, featured artists or the album), keeping the closest
+     * in length. Plain lyrics only if none of them is synced.
+     */
     private static Lyrics fromLrclib(String a, String t, String album, long durationMs) throws Exception {
+        Lyrics plainOnly = null;
         if (durationMs > 0) {
             String body = get(LRCLIB + "get?artist_name=" + enc(a) + "&track_name=" + enc(t)
                     + (album != null && !album.isEmpty() ? "&album_name=" + enc(album) : "")
                     + "&duration=" + Math.round(durationMs / 1000.0), null);
             if (body != null) {
                 Lyrics l = fromLrclibJson(new JSONObject(body));
-                if (l.any() || l.instrumental) return l;
+                if (l.instrumental || !l.synced.isEmpty()) return l;
+                if (l.any()) plainOnly = l;
             }
         }
-        // Search: the closest in length, synced ones first.
-        String body = get(LRCLIB + "search?track_name=" + enc(t) + "&artist_name=" + enc(a), null);
+        JSONObject best = bestOf(get(LRCLIB + "search?track_name=" + enc(t) + "&artist_name=" + enc(a), null), a, t, durationMs, false);
+        if (best == null || !synced(best)) {
+            JSONObject wide = bestOf(get(LRCLIB + "search?q=" + enc(a + " " + t), null), a, t, durationMs, true);
+            if (wide != null && (best == null || synced(wide))) best = wide;
+        }
+        AppLog.w("lyrics lrclib: " + (best == null ? "nothing" : (synced(best) ? "synced" : "plain") + " · "
+                + best.optString("trackName") + " · " + best.optString("artistName") + " · " + best.optDouble("duration") + " s"));
+        if (best != null && (synced(best) || plainOnly == null)) return fromLrclibJson(best);
+        return plainOnly;
+    }
+
+    private static boolean synced(JSONObject o) {
+        return !o.isNull("syncedLyrics") && !o.optString("syncedLyrics", "").isEmpty();
+    }
+
+    /** The closest in length (within 10 s), synced ones first; `check` keeps only the same song and artist. */
+    private static JSONObject bestOf(String body, String a, String t, long durationMs, boolean check) throws Exception {
         JSONArray list = body == null ? null : new JSONArray(body);
+        String wantT = simple(t), wantA = simple(a);
         JSONObject best = null;
         double bestScore = Double.MAX_VALUE;
         for (int i = 0; list != null && i < list.length(); i++) {
             JSONObject o = list.getJSONObject(i);
+            if (check) {
+                String name = simple(clean(o.optString("trackName"))), artist = simple(o.optString("artistName"));
+                if (name.isEmpty() || !(name.contains(wantT) || wantT.contains(name))) continue;
+                if (!wantA.isEmpty() && !artist.contains(wantA) && !wantA.contains(artist)) continue;
+            }
             double diff = durationMs > 0 ? Math.abs(o.optDouble("duration", 0) * 1000 - durationMs) / 1000.0 : 0;
-            if (durationMs > 0 && diff > 8) continue;
-            double score = diff + (o.optString("syncedLyrics", "").isEmpty() || o.isNull("syncedLyrics") ? 100 : 0);
+            if (durationMs > 0 && diff > 10) continue;
+            double score = diff + (synced(o) ? 0 : 100);
             if (score < bestScore) { bestScore = score; best = o; }
         }
-        return best == null ? null : fromLrclibJson(best);
+        return best;
     }
 
     private static Lyrics fromLrclibJson(JSONObject o) {
@@ -208,10 +237,21 @@ final class Lyrics {
         return enc(s).replace("+", "%20");
     }
 
+    /** One retry after a short pause: LRCLIB is sometimes slow or busy. */
     private static String get(String url, String referer) throws Exception {
+        try {
+            return fetch(url, referer);
+        } catch (java.io.IOException e) {
+            AppLog.w("lyrics: " + e.getMessage() + ", once more");
+            Thread.sleep(1500);
+            return fetch(url, referer);
+        }
+    }
+
+    private static String fetch(String url, String referer) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(10_000);
-        c.setReadTimeout(15_000);
+        c.setReadTimeout(20_000);
         c.setRequestProperty("User-Agent", "FreeMyTV karaoke (github.com/simbasjungles/free-my-tv)");
         c.setRequestProperty("Accept", "application/json");
         if (referer != null) c.setRequestProperty("Referer", referer);
