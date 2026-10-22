@@ -1403,7 +1403,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private static List<HomeApps.Item> drawerList(Context c) {
         List<HomeApps.Item> list = HomeApps.allInputs(c);
-        list.addAll(HomeApps.drawerShortcuts());
+        list.addAll(HomeApps.drawerShortcuts(getContext()));
         return list;
     }
 
@@ -2179,6 +2179,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         click.open();
         if (it.kind == HomeApps.ALL_APPS) {
             openSheet();
+            return;
+        }
+        if (it.kind == HomeApps.VPN) {
+            if (getContext() instanceof android.app.Activity) QuickVpn.open((android.app.Activity) getContext());
             return;
         }
         if (it.kind == HomeApps.BT_SPEAKER) {

@@ -40,4 +40,6 @@ The Home button still goes to Amazon's home: Fire OS 6 doesn't let apps take it.
 - The app's icon opens the home screen; Settings is the round button at the top right.
 - The top buttons are All Apps and **Fire TV Home** (Amazon's home), instead of Live TV and HDMI inputs.
 - Prime Video, YouTube, Paramount+ (Latin America) and Crunchyroll use their Fire TV packages on the shelf and in the picks.
+- The drawer (↓ from the shelf) adds **VPN** (NordVPN's quick connect, `nordvpn://connect`) and **Speaker** (connects
+  a paired Bluetooth speaker; with several, a list to pick from).
 - No Free My TV mode, debloat, ADB or screensaver switch: `HomeMode` does nothing on Amazon devices (`Ui.FIRE`).

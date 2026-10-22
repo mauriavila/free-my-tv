@@ -9,6 +9,9 @@ final class Spanish {
             case "Live TV": return "TV en vivo";
             case "Open": return "Abrir";
             case "connected": return "conectado";
+            case "VPN is on: disconnect it in NordVPN": return "VPN activa: desconectala en NordVPN";
+            case "Connecting the VPN…": return "Conectando la VPN…";
+            case "Couldn't open NordVPN": return "No se pudo abrir NordVPN";
             case "Speaker": return "Parlante";
             case "Couldn't connect to ": return "No se pudo conectar a ";
             case "Disconnected: ": return "Desconectado: ";

@@ -16,6 +16,9 @@ final class Russian {
             case "Live TV": return "Телеканалы";
             case "Open": return "Открыть";
             case "connected": return "подключено";
+            case "VPN is on: disconnect it in NordVPN": return "VPN включён: отключите его в NordVPN";
+            case "Connecting the VPN…": return "Подключение VPN…";
+            case "Couldn't open NordVPN": return "Не удалось открыть NordVPN";
             case "Speaker": return "Колонка";
             case "Couldn't connect to ": return "Не удалось подключиться к ";
             case "Disconnected: ": return "Отключено: ";

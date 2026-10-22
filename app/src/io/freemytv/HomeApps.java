@@ -62,6 +62,8 @@ final class HomeApps {
     static final int FIRE_HOME = 8;
     /** Fire TV: connect or disconnect the Bluetooth speaker (BtSpeaker). */
     static final int BT_SPEAKER = 9;
+    /** Fire TV: connect the VPN (QuickVpn). */
+    static final int VPN = 10;
     /** Image size of each card (16:9; on screen it shows up to ~330 px wide). */
     static final int TILE_W = 384, TILE_H = 216;
 
@@ -230,8 +232,9 @@ final class HomeApps {
     }
 
     /** Shortcuts in the bottom drawer. */
-    static List<Item> drawerShortcuts() {
+    static List<Item> drawerShortcuts(Context c) {
         List<Item> items = new ArrayList<>();
+        if (QuickVpn.supported(c)) items.add(shortcut(VPN, "vpn", "VPN", "vpn_lock"));
         if (BtSpeaker.supported()) items.add(shortcut(BT_SPEAKER, "speaker", Ui.tr("Caixa de som", "Speaker"), "speaker"));
         items.add(shortcut(ALL_APPS, "all", Ui.tr("Todos os Apps", "All Apps"), "apps"));
         items.add(shortcut(SETTINGS, "settings", Ui.tr("Ajustes do Início", "Home Settings"), "settings"));
