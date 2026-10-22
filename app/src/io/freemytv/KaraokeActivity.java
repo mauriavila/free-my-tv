@@ -86,6 +86,7 @@ public class KaraokeActivity extends Activity {
     private boolean searching;
     private String searchError;
     private final Map<String, Bitmap> thumbs = new HashMap<>();
+    private final BeatPulse beat = new BeatPulse();
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -108,11 +109,13 @@ public class KaraokeActivity extends Activity {
         super.onResume();
         resumed = true;
         if (state == NO_ACCESS) { disconnect(); connect(); } else refresh();
+        beat.start();
         view.start();
     }
 
     @Override protected void onPause() {
         resumed = false;
+        beat.stop();
         view.stop();
         super.onPause();
     }
@@ -514,6 +517,18 @@ public class KaraokeActivity extends Activity {
         private final RadialGradient[] blobs = new RadialGradient[3];
         private final Matrix m = new Matrix();
         private final Paint veil = new Paint();
+
+        // Party: stage beams sweeping from below, slowly changing color, and drifting sparkles; with BeatPulse they
+        // swell on the beat. Soft changes only: no strobe or full-screen flashes.
+        private static final int BEAMS = 4, SPARKS = 42, HUES = 36;
+        private final Paint beamPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint sparkPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path beam = new android.graphics.Path();
+        private final android.graphics.ColorFilter[] tints = new android.graphics.ColorFilter[HUES];
+        private final int[] hueColors = new int[HUES];
+        private final float[] sx = new float[SPARKS], sy = new float[SPARKS], svx = new float[SPARKS], svy = new float[SPARKS],
+                sr = new float[SPARKS], sph = new float[SPARKS];
+        private float pulse;
         private long songAt = -10_000;
         private final RectF rect = new RectF();
 
@@ -562,6 +577,7 @@ public class KaraokeActivity extends Activity {
             sourceP.setTextAlign(Paint.Align.RIGHT);
             lineP = Ui.text(Ui.displaySemibold, 80 * k, 0xFFFFFFFF);
             lineP.setTextAlign(Paint.Align.CENTER);
+            lineP.setFlags(lineP.getFlags() | Paint.LINEAR_TEXT_FLAG);   // scaled smoothly, without snapping to pixels
             stateP = Ui.text(Ui.displaySemibold, 60 * k, 0xFFFFFFFF);
             stateP.setTextAlign(Paint.Align.CENTER);
             cmdP = Ui.text(Ui.medium, 28 * k, 0xCCFFFFFF);
@@ -575,6 +591,28 @@ public class KaraokeActivity extends Activity {
             spin.setStrokeCap(Paint.Cap.ROUND);
             spin.setColor(0xFFFFFFFF);
             veil.setShader(new LinearGradient(0, 0, 0, h, new int[] {0x8C000000, 0x59000000, 0x99000000}, null, Shader.TileMode.CLAMP));
+            float len = h * 1.25f;
+            beamPaint.setShader(new LinearGradient(0, 0, len, 0, 0xFFFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+            beamPaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
+            beam.reset();
+            beam.moveTo(0, 0);
+            beam.lineTo(len, -len * 0.11f);
+            beam.lineTo(len, len * 0.11f);
+            beam.close();
+            for (int i = 0; i < HUES; i++) {
+                hueColors[i] = Color.HSVToColor(new float[] {i * 360f / HUES, 0.75f, 1f});
+                tints[i] = new android.graphics.PorterDuffColorFilter(hueColors[i], android.graphics.PorterDuff.Mode.SRC_IN);
+            }
+            java.util.Random r = new java.util.Random(7);
+            for (int i = 0; i < SPARKS; i++) {
+                sx[i] = r.nextFloat() * w;
+                sy[i] = r.nextFloat() * h;
+                svx[i] = (r.nextFloat() - 0.5f) * 24 * k;
+                svy[i] = -(10 + r.nextFloat() * 28) * k;
+                sr[i] = (2 + r.nextFloat() * 4.5f) * k;
+                sph[i] = r.nextFloat() * 6.28f;
+            }
+            sparkPaint.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SCREEN));
             makeBlobs();
             artShader = null;
         }
@@ -626,7 +664,7 @@ public class KaraokeActivity extends Activity {
             float dt = Math.min(0.1f, (now - lastFrame) / 1000f);
             lastFrame = now;
             float t = (now - start) / 1000f;
-            drawBackground(c, t);
+            drawBackground(c, t, dt);
             drawHeader(c);
             if (results != null) {
                 drawResults(c, t, dt);
@@ -658,11 +696,15 @@ public class KaraokeActivity extends Activity {
             drawOffset(c);
         }
 
-        private void drawBackground(Canvas c, float t) {
+        private void drawBackground(Canvas c, float t, float dt) {
             c.drawColor(0xFF0B0B10);
+            // The beat: jumps to 1 and fades in ~0.4 s (no beat detection: a slow breathing instead).
+            long sinceBeat = SystemClock.uptimeMillis() - beat.beatAt;
+            float target = sinceBeat < 2000 ? (float) Math.exp(-sinceBeat / 260f) : 0.25f + 0.25f * (float) Math.sin(t * 1.6f);
+            pulse += (target - pulse) * Ui.clamp(dt * 18);
             float fadeIn = Ui.clamp((SystemClock.uptimeMillis() - songAt) / 900f);
             if (tiny != null) {
-                bgPaint.setAlpha(Math.round(255 * 0.55f * fadeIn));
+                bgPaint.setAlpha(Math.round(255 * 0.5f * fadeIn));
                 rect.set(-w * 0.1f, -h * 0.1f, w * 1.1f, h * 1.1f);
                 c.drawBitmap(tiny, null, rect, bgPaint);
             }
@@ -670,13 +712,48 @@ public class KaraokeActivity extends Activity {
                 float ph = i * 2.1f;
                 float x = w * (0.5f + 0.38f * (float) Math.sin(t * (0.11f + 0.03f * i) + ph));
                 float y = h * (0.5f + 0.32f * (float) Math.cos(t * (0.08f + 0.025f * i) + ph * 1.3f));
-                m.setTranslate(x, y);
+                float grow = 1 + 0.12f * pulse;
+                m.setScale(grow, grow);
+                m.postTranslate(x, y);
                 blobs[i].setLocalMatrix(m);
                 blob.setShader(blobs[i]);
-                blob.setAlpha(Math.round(255 * (0.55f + 0.45f * fadeIn)));
+                blob.setAlpha(Math.round(255 * (0.5f + 0.4f * fadeIn + 0.1f * pulse)));
                 c.drawRect(0, 0, w, h, blob);
             }
+            drawBeams(c, t);
+            drawSparks(c, t, dt);
             c.drawRect(0, 0, w, h, veil);
+        }
+
+        /** Four stage lights from below, sweeping slowly, each a color that drifts around the color wheel. */
+        private void drawBeams(Canvas c, float t) {
+            for (int i = 0; i < BEAMS; i++) {
+                float ox = w * (0.08f + 0.28f * i), oy = h * 1.04f;
+                float base = -90 + (i - 1.5f) * 14;                          // fanned out upwards
+                float angle = base + 24 * (float) Math.sin(t * (0.35f + 0.07f * i) + i * 1.7f);
+                int hue = (int) ((t * 6 + i * 9) % HUES);
+                beamPaint.setColorFilter(tints[(hue + HUES) % HUES]);
+                beamPaint.setAlpha(Math.round(255 * (0.16f + 0.2f * pulse)));
+                c.save();
+                c.translate(ox, oy);
+                c.rotate(angle);
+                c.drawPath(beam, beamPaint);
+                c.restore();
+            }
+        }
+
+        /** Sparkles drifting up, twinkling; brighter on the beat. */
+        private void drawSparks(Canvas c, float t, float dt) {
+            for (int i = 0; i < SPARKS; i++) {
+                sx[i] += svx[i] * dt;
+                sy[i] += svy[i] * dt * (1 + pulse);
+                if (sy[i] < -10 * k) { sy[i] = h + 10 * k; sx[i] = (sx[i] * 7.31f + 97 * k) % w; }
+                if (sx[i] < 0) sx[i] += w; else if (sx[i] > w) sx[i] -= w;
+                float tw = 0.5f + 0.5f * (float) Math.sin(t * 2.3f + sph[i]);
+                sparkPaint.setColor(hueColors[(i * 5 + (int) (t * 4)) % HUES]);
+                sparkPaint.setAlpha(Math.round(255 * Ui.clamp(0.15f + 0.45f * tw + 0.35f * pulse)));
+                c.drawCircle(sx[i], sy[i], sr[i] * (1 + 0.5f * pulse), sparkPaint);
+            }
         }
 
         private void drawHeader(Canvas c) {
@@ -725,10 +802,12 @@ public class KaraokeActivity extends Activity {
         // MARK: Lyrics
 
         private static final float GAP = 118;   // between lines, at 1920 px wide
+        private static final float SIZE = 80;   // the line being sung; the others are scaled down from it
 
         /**
          * Synced lyrics as a list that glides: every line has its place and the list scrolls smoothly to the one being
-         * sung (no jumps). Lines grow and light up as they reach the middle; the current one fills with white as it goes.
+         * sung. Everything a line looks like (size, brightness, place) is a smooth function of its distance to the
+         * middle, and the text is drawn at one size and scaled by the canvas, so nothing jumps or bounces as lines pass.
          */
         private void drawSynced(Canvas c, float dt) {
             List<Lyrics.Line> lines = lyrics.synced;
@@ -737,47 +816,55 @@ public class KaraokeActivity extends Activity {
             for (int i = 0; i < lines.size(); i++) { if (lines.get(i).at <= pos) idx = i; else break; }
             float target = Math.max(0, idx);
             if (scroll < 0) scroll = target;
-            // Critically damped glide: quick to start, soft to land.
-            scroll += (target - scroll) * (1 - (float) Math.exp(-dt * 5.5f));
+            // Exponential glide: no overshoot, so no bounce at the end.
+            scroll += (target - scroll) * (1 - (float) Math.exp(-dt * 4.5f));
+            if (Math.abs(target - scroll) < 0.0005f) scroll = target;
             long at = idx >= 0 ? lines.get(idx).at : 0;
             long next = idx + 1 < lines.size() ? lines.get(idx + 1).at : at + 5000;
             float p = idx < 0 ? 0 : Ui.clamp((pos - at) / (float) Math.max(400, next - at));
             float cy = h * 0.56f;
             int from = Math.max(0, (int) Math.floor(scroll) - 3), to = Math.min(lines.size() - 1, (int) Math.ceil(scroll) + 4);
             for (int i = from; i <= to; i++) {
-                float d = i - scroll, dist = Math.abs(d);
-                if (dist > 4.2f) continue;
-                float near = Ui.clamp(1 - dist);                      // 1 in the middle, 0 a line away
-                float scale = 0.66f + 0.34f * near;
-                float alpha = dist <= 1 ? 0.42f + 0.58f * near : Math.max(0, 0.42f - (dist - 1) * 0.13f);
-                if (d < 0) alpha *= 0.75f;                            // sung lines fade a little more
-                float y = cy + d * GAP * k * (d > 0 ? 1.0f : 1.1f);
-                drawLine(c, orNote(lines.get(i).text), y, scale, alpha, i == idx ? p : i < idx ? 1 : 0, i == idx);
+                float d = i - scroll;
+                float alpha = alphaAt(d);
+                if (alpha <= 0.01f) continue;
+                drawLine(c, orNote(lines.get(i).text), cy + d * GAP * k, scaleAt(d), alpha,
+                        i == idx ? p : i < idx ? 1 : 0);
             }
         }
 
-        /** One line, shrunk to fit; `filled` (0..1) of it in full white over a dimmer copy. */
-        private void drawLine(Canvas c, String s, float y, float scale, float alpha, float filled, boolean current) {
-            float size = 80 * k * scale;
-            lineP.setTextSize(size);
+        /** 1 in the middle, smaller further away (smooth, the same both ways). */
+        private float scaleAt(float d) {
+            float near = Ui.clamp(1 - Math.abs(d));
+            return 0.66f + 0.34f * near * near * (3 - 2 * near);
+        }
+
+        /** Brightest in the middle, fading with distance; lines already sung fade a little more, smoothly. */
+        private float alphaAt(float d) {
+            float dist = Math.abs(d), near = Ui.clamp(1 - dist);
+            float a = dist <= 1 ? 0.45f + 0.55f * near * near * (3 - 2 * near) : Math.max(0, 0.45f - (dist - 1) * 0.14f);
+            return a * (1 - 0.3f * Ui.clamp(-d));
+        }
+
+        /**
+         * One line, centered at y, drawn at SIZE and scaled (shrunk further to fit); `filled` (0..1) of it in full white
+         * over a dimmer copy. Past lines are fully filled and future ones empty, so a line never changes style.
+         */
+        private void drawLine(Canvas c, String s, float y, float scale, float alpha, float filled) {
+            lineP.setTextSize(SIZE * k);
             float tw = lineP.measureText(s), max = 1720 * k;
-            if (tw > max) { size *= max / tw; lineP.setTextSize(size); tw = max; }
-            float base = y + size * 0.35f;
-            if (!current) {
-                lineP.setAlpha(Math.round(255 * alpha * (filled >= 1 ? 0.85f : 1)));
-                c.drawText(s, w / 2, base, lineP);
-                return;
-            }
-            float left = w / 2 - tw / 2;
-            lineP.setAlpha(Math.round(255 * 0.4f * alpha));
+            float fit = tw * scale > max ? max / tw : scale;
+            float base = y + SIZE * k * 0.35f, left = w / 2 - tw / 2;
+            c.save();
+            c.scale(fit, fit, w / 2, y);
+            lineP.setAlpha(Math.round(255 * 0.42f * alpha));
             c.drawText(s, w / 2, base, lineP);
             if (filled > 0) {
-                c.save();
-                c.clipRect(left, base - size * 1.2f, left + tw * filled, base + size * 0.5f);
+                c.clipRect(left, base - SIZE * k * 1.2f, left + tw * filled, base + SIZE * k * 0.5f);
                 lineP.setAlpha(Math.round(255 * alpha));
                 c.drawText(s, w / 2, base, lineP);
-                c.restore();
             }
+            c.restore();
         }
 
         /** Not synced: the plain lyrics, gliding with the song's progress. */
@@ -790,9 +877,9 @@ public class KaraokeActivity extends Activity {
             scroll += (target - scroll) * (1 - (float) Math.exp(-dt * 3f));
             c.drawText(Ui.tr("Letra sem sincronizar", "Lyrics not synced", "Letra sin sincronizar"), w / 2, h * 0.26f, cmdP);
             for (int i = Math.max(0, (int) scroll - 3); i < lines.size() && i <= scroll + 4; i++) {
-                float d = i - scroll, dist = Math.abs(d), near = Ui.clamp(1 - dist);
-                float alpha = dist <= 1 ? 0.42f + 0.58f * near : Math.max(0, 0.42f - (dist - 1) * 0.13f);
-                drawLine(c, lines.get(i), h * 0.56f + d * GAP * k, 0.66f + 0.2f * near, alpha, 0, false);
+                float d = i - scroll;
+                float alpha = alphaAt(d);
+                if (alpha > 0.01f) drawLine(c, lines.get(i), h * 0.56f + d * GAP * k, 0.66f + 0.2f * Ui.clamp(1 - Math.abs(d)), alpha, 1);
             }
         }
 

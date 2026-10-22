@@ -54,6 +54,9 @@ Without it, ▲ opens Spotify's own search instead, and the karaoke comes back w
 
 Remote: ▲ search, ◀ ▶ move the lyrics earlier or later, OK pause, ⏪ ⏩ previous or next song, ▼ Spotify, Back leaves.
 
+Party lights (stage beams and sparkles) move on their own; to make them swell on the beat (BeatPulse reads only the
+sound's spectrum, through Android's Visualizer), once: `adb shell pm grant io.freemytv android.permission.RECORD_AUDIO`.
+
 ## What changes on Fire TV
 
 - The app's icon opens the home screen; Settings is the round button at the top right.
