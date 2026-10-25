@@ -68,6 +68,8 @@ final class HomeApps {
     static final int KARAOKE = 11;
     /** Fire TV: the room's smart lights (Lights): the menu, and movie mode in one press. */
     static final int LIGHTS = 12, MOVIE = 13;
+    /** Fire TV: the TV's equalizer (Sound). */
+    static final int SOUND = 14;
     /** Image size of each card (16:9; on screen it shows up to ~330 px wide). */
     static final int TILE_W = 384, TILE_H = 216;
 
@@ -243,6 +245,7 @@ final class HomeApps {
             items.add(shortcut(LIGHTS, "lights", Ui.tr("Luzes", "Lights", "Luces"), "lightbulb"));
             items.add(shortcut(MOVIE, "movie", Ui.tr("Cinema", "Movie", "Película"), "movie"));
         }
+        if (Sound.supported()) items.add(shortcut(SOUND, "sound", Ui.tr("Som", "Sound", "Sonido"), "equalizer"));
         if (QuickVpn.supported(c)) items.add(shortcut(VPN, "vpn", "VPN", "vpn_lock"));
         if (BtSpeaker.supported()) items.add(shortcut(BT_SPEAKER, "speaker", Ui.tr("Caixa de som", "Speaker"), "speaker"));
         items.add(shortcut(ALL_APPS, "all", Ui.tr("Todos os Apps", "All Apps"), "apps"));

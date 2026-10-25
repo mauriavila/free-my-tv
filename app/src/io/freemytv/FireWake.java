@@ -70,9 +70,11 @@ public class FireWake extends Service {
         f.addAction(HDMI_PLUGGED);
         f.addAction(android.media.AudioManager.ACTION_HDMI_AUDIO_PLUG);
         registerReceiver(receiver, f);
+        Sound.restore(this);   // the equalizer chosen in the drawer, back after a restart
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && Sound.ACTION.equals(intent.getAction())) Sound.apply(this, intent.getIntExtra(Sound.EXTRA, 0), true);
         return START_STICKY;   // Fire OS may stop it to free memory: it comes back on its own
     }
 

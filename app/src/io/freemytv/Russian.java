@@ -30,6 +30,13 @@ final class Russian {
             case "Movie": return "Кино";
             case "Turn on": return "Включить";
             case "Turn off": return "Выключить";
+            case "Sound": return "Звук";
+            case "Less bass": return "Меньше баса";
+            case "Much less bass": return "Намного меньше баса";
+            case "Clearer voices": return "Чётче голоса";
+            case "Sound set": return "Звук настроен";
+            case "This TV doesn't allow changing the equalizer": return "Этот телевизор не позволяет менять эквалайзер";
+            case "Normal": return "Обычный";
             case "Movie mode": return "Режим кино";
             case "Warm light": return "Тёплый свет";
             case "Cool light": return "Холодный свет";

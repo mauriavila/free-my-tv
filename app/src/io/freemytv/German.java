@@ -23,6 +23,13 @@ final class German {
             case "Movie": return "Kino";
             case "Turn on": return "Einschalten";
             case "Turn off": return "Ausschalten";
+            case "Sound": return "Ton";
+            case "Less bass": return "Weniger Bass";
+            case "Much less bass": return "Viel weniger Bass";
+            case "Clearer voices": return "Klarere Stimmen";
+            case "Sound set": return "Ton eingestellt";
+            case "This TV doesn't allow changing the equalizer": return "Dieser Fernseher erlaubt keinen Equalizer";
+            case "Normal": return "Normal";
             case "Movie mode": return "Kinomodus";
             case "Warm light": return "Warmes Licht";
             case "Cool light": return "Kühles Licht";

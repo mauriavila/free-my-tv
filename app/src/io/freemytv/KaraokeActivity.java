@@ -298,16 +298,23 @@ public class KaraokeActivity extends Activity {
             main.post(() -> {
                 if (good) CACHE.put(key, l);
                 if (!key.equals(trackKey)) return;
-                if (good || retry || lyrics == null) show(l);
+                // A first try without times shows what it found but doesn't send you to Spotify yet: the sources are
+                // sometimes down for a moment, so it tries once more 10 s later, and only then does the countdown start.
+                if (good || retry || !hasSynced()) show(l, good || !retry);
                 if (!good && retry) {
-                    AppLog.w("lyrics: no times for " + t + ", once more in 15 s");
-                    main.postDelayed(() -> { if (key.equals(trackKey) && !hasSynced()) findLyrics(key, a, t, album, duration, false); }, 15_000);
+                    AppLog.w("lyrics: no times for " + t + ", once more in 10 s");
+                    main.postDelayed(() -> { if (key.equals(trackKey) && !hasSynced()) findLyrics(key, a, t, album, duration, false); }, 10_000);
                 }
             });
         });
     }
 
     private void show(Lyrics l) {
+        show(l, true);
+    }
+
+    /** `auto`: without synced lyrics, the countdown to Spotify's own may start (not while another try is coming). */
+    private void show(Lyrics l, boolean auto) {
         lyrics = l;
         state = l == null || !l.any() ? (l != null && l.instrumental ? INSTRUMENTAL : NO_LYRICS) : READY;
         view.lyricsChanged();
@@ -317,7 +324,7 @@ public class KaraokeActivity extends Activity {
                 awayForLyrics = false;
                 bringToFront(300);
             }
-        } else if (resumed && !syncing && controller != null) {
+        } else if (auto && resumed && !syncing && controller != null) {
             autoAt = SystemClock.uptimeMillis() + AUTO_MS;
             main.postDelayed(autoOpen, AUTO_MS);
         }

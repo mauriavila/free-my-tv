@@ -52,6 +52,14 @@ final class Lyrics {
         String t = clean(title), a = mainArtist(artist);
         Lyrics mine = local(dir, artist, title);
         if (mine != null) return mine;
+        Lyrics kept = kept(dir, artist, title);   // found before: no need for the sources (LRCLIB is sometimes down)
+        if (kept != null) return kept;
+        Lyrics found = search(a, t, album, durationMs);
+        if (found != null && !found.synced.isEmpty()) keep(dir, artist, title, found);
+        return found;
+    }
+
+    private static Lyrics search(String a, String t, String album, long durationMs) {
         AppLog.w("lyrics for: " + a + " · " + t + " · " + durationMs / 1000 + " s");
         Lyrics lrclib = null;
         try {
@@ -101,6 +109,42 @@ final class Lyrics {
         } catch (Exception e) {
             AppLog.w("lyrics: couldn't read " + f + ": " + e.getMessage());
             return null;
+        }
+    }
+
+    /** Synced lyrics found before, kept on the TV (lyrics-kept/, with their source on the first line). */
+    private static java.io.File keptFile(java.io.File dir, String artist, String title) {
+        return new java.io.File(new java.io.File(dir, "lyrics-kept"), Integer.toHexString(key(artist, title).hashCode()) + ".lrc");
+    }
+
+    private static Lyrics kept(java.io.File dir, String artist, String title) {
+        java.io.File f = keptFile(dir, artist, title);
+        if (!f.isFile()) return null;
+        try (InputStream in = new java.io.FileInputStream(f)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+            String text = out.toString("UTF-8");
+            int nl = text.indexOf('\n');
+            String source = nl > 0 ? text.substring(0, nl).trim() : "LRCLIB";
+            List<Line> lines = parseLrc(nl > 0 ? text.substring(nl + 1) : text);
+            List<String> plain = new ArrayList<>();
+            for (Line l : lines) if (!l.text.isEmpty()) plain.add(l.text);
+            return lines.isEmpty() ? null : new Lyrics(lines, plain, false, source);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void keep(java.io.File dir, String artist, String title, Lyrics l) {
+        try {
+            java.io.File f = keptFile(dir, artist, title);
+            f.getParentFile().mkdirs();
+            try (java.io.OutputStream out = new java.io.FileOutputStream(f)) {
+                out.write((l.source + "\n" + toLrc(l.synced)).getBytes("UTF-8"));
+            }
+        } catch (Exception e) {
+            AppLog.w("lyrics: couldn't keep: " + e.getMessage());
         }
     }
 
@@ -350,14 +394,16 @@ final class Lyrics {
         return enc(s).replace("+", "%20");
     }
 
-    /** One retry after a short pause: LRCLIB is sometimes slow or busy. */
+    /** Two retries, 1.5 and 4 s later: LRCLIB is sometimes busy for a moment (HTTP 503). */
     private static String get(String url, String referer) throws Exception {
-        try {
-            return fetch(url, referer);
-        } catch (java.io.IOException e) {
-            AppLog.w("lyrics: " + e.getMessage() + ", once more");
-            Thread.sleep(1500);
-            return fetch(url, referer);
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return fetch(url, referer);
+            } catch (java.io.IOException e) {
+                if (attempt == 2) throw e;
+                AppLog.w("lyrics: " + e.getMessage() + ", once more");
+                Thread.sleep(attempt == 0 ? 1500 : 4000);
+            }
         }
     }
 

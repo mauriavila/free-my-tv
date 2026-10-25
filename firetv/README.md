@@ -106,6 +106,7 @@ bulb runs by itself (the screen follows the beat; the bulbs, their own rhythm): 
 - The app's icon opens the home screen; Settings is the round button at the top right.
 - The top buttons are All Apps and **Fire TV Home** (Amazon's home), instead of Live TV and HDMI inputs.
 - Prime Video, YouTube, Paramount+ (Latin America) and Apple TV use their Fire TV packages; Xuper TV is on the shelf.
-- The drawer (↓ from the shelf) adds **Karaoke**, **Lights** and **Movie** (with a Tuya key), **VPN** (NordVPN's quick connect, `nordvpn://connect`) and **Speaker** (connects
+- The drawer (↓ from the shelf) adds **Karaoke**, **Lights** and **Movie** (with a Tuya key), **Sound** (the whole TV's
+  equalizer: Normal, Less bass, Much less bass, Clearer voices; kept after restarts), **VPN** (NordVPN's quick connect, `nordvpn://connect`) and **Speaker** (connects
   a paired Bluetooth speaker; with several, a list to pick from).
 - No Free My TV mode, debloat, ADB or screensaver switch: `HomeMode` does nothing on Amazon devices (`Ui.FIRE`).
